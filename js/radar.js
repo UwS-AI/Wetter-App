@@ -1,0 +1,579 @@
+/*
+ * radar.js – Niederschlagsradar (Leaflet + RainViewer)
+ * =====================================================
+ *
+ * Zeigt im Bereich #radar eine Karte mit animiertem Regenradar.
+ *
+ * Schnittstelle (siehe docs/ARCHITEKTUR.md):
+ *   Wetter.radar.init(containerId)          Karte bauen, Bedienelemente verdrahten
+ *   Wetter.radar.setLocation(lat, lon, name) Karte zentrieren (Zoom 8), Marker setzen
+ *   Wetter.radar.invalidateSize()           nach Layoutwechsel (z. B. Gerät gedreht)
+ *
+ * Benutzte DOM-Elemente:
+ *   #radar-map     hier kommt die Karte hinein
+ *   #radar-play    Play/Pause-Knopf
+ *   #radar-slider  Schieberegler (input type=range) für die Zeit
+ *   #radar-time    Uhrzeit des angezeigten Bildes
+ *   #radar-status  Hinweis- oder Fehlertext (sonst leer)
+ *
+ * So funktioniert's (Kurzfassung):
+ *   1. Leaflet (globale Variable L) baut die Karte mit CARTO-Hintergrundkacheln.
+ *   2. Von RainViewer holen wir eine Liste von Radarbildern („Frames“):
+ *      gemessene Bilder der Vergangenheit (radar.past) und – falls vorhanden –
+ *      eine Kurzprognose (radar.nowcast). Jedes Frame hat {time, path}.
+ *   3. Für jedes Frame legen wir eine eigene Kachel-Ebene (L.tileLayer) an,
+ *      zunächst unsichtbar (opacity 0). So lädt der Browser alle Bilder vor.
+ *   4. Zum Anzeigen machen wir genau eine Ebene sichtbar (opacity 0.75).
+ *      Die Animation schaltet einfach reihum die Sichtbarkeit um.
+ *
+ * Klassisches Skript (kein import/export): Alles hängt an window.Wetter.
+ */
+
+window.Wetter = window.Wetter || {};
+
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------------
+  // Einstellungen
+  // ---------------------------------------------------------------------
+  const CONFIG = {
+    // Liste der verfügbaren Radarbilder
+    framesUrl: "https://api.rainviewer.com/public/weather-maps.json",
+    // Hintergrundkarte von CARTO („Voyager“). {s} = Subdomain a–d,
+    // {r} = „@2x“ auf Retina-Bildschirmen (ersetzt Leaflet automatisch).
+    baseUrl: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+    baseAttribution:
+      '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>-Mitwirkende, ' +
+      '© <a href="https://carto.com/attributions">CARTO</a>',
+    radarAttribution: 'Radar: <a href="https://www.rainviewer.com/api.html">RainViewer</a>',
+    // Radar-Kacheln: Größe 256, Farbschema 2, geglättet (1), Schnee anzeigen (1)
+    radarTileSuffix: "/256/{z}/{x}/{y}/2/1_1.png",
+    radarOpacity: 0.75,
+    // RainViewer liefert Radar nur bis Zoom 7 scharf. Darüber vergrößert
+    // Leaflet die Zoom-7-Kacheln einfach (maxNativeZoom).
+    radarMaxNativeZoom: 7,
+    startZoom: 8,
+    maxZoom: 12,
+    minZoom: 3,
+    // Mitte Deutschlands, falls noch kein Ort gesetzt ist
+    defaultCenter: [51.1657, 10.4515],
+    frameDelay: 600, // ms pro Bild in der Animation
+    endPause: 1500, // ms Pause auf dem letzten Bild, dann von vorn
+    maxLoadWaits: 5, // so oft (à frameDelay) auf ein ladendes Bild warten
+    refreshInterval: 10 * 60 * 1000, // Frameliste alle 10 Minuten neu laden
+    fetchTimeout: 10000, // 10 s, wie bei Wetter.api
+  };
+
+  // ---------------------------------------------------------------------
+  // Zustand des Moduls (alles an einer Stelle, damit man es leicht findet)
+  // ---------------------------------------------------------------------
+  const state = {
+    initialized: false, // init() schon gelaufen?
+    map: null, // die Leaflet-Karte (oder null, wenn Leaflet fehlt)
+    els: {}, // gefundene DOM-Elemente
+    host: "", // RainViewer-Server, z. B. "https://tilecache.rainviewer.com"
+    frames: [], // [{ time: Sekunden, path, isForecast }]
+    layers: new Map(), // path → { layer, loaded } (Kachel-Ebene je Frame)
+    index: -1, // aktuell angezeigtes Frame
+    lastPastIndex: -1, // letztes gemessenes Frame (Startposition)
+    playing: false,
+    timer: null, // setTimeout der Animation
+    waits: 0, // wie oft schon auf ein ladendes Bild gewartet wurde
+    refreshTimer: null, // setInterval für das Neuladen der Frameliste
+    resumeOnVisible: false, // nach dem Zurückkehren in den Tab weiterspielen?
+    location: null, // { lat, lon, name, utcOffsetSeconds } – auch vor init merken
+    marker: null,
+  };
+
+  // ---------------------------------------------------------------------
+  // Hilfsfunktionen für Texte
+  // ---------------------------------------------------------------------
+
+  /** Uhrzeit „14:20“ aus Unix-Sekunden (Ortszeit, falls Offset bekannt). */
+  function formatClock(seconds) {
+    const date = new Date(seconds * 1000);
+    const opts = { hour: "2-digit", minute: "2-digit" };
+    const api = window.Wetter.api;
+    const offset = state.location && state.location.utcOffsetSeconds;
+    if (typeof offset === "number" && api && typeof api.formatTime === "function") {
+      try {
+        return api.formatTime(date, offset, opts);
+      } catch (e) {
+        /* weiter mit Gerätezeit */
+      }
+    }
+    return date.toLocaleTimeString("de-DE", opts);
+  }
+
+  /** Relativer Abstand zu jetzt: „vor 30 Min.“, „in 20 Min.“, „gerade eben“. */
+  function relativeText(seconds) {
+    const diffMin = Math.round((seconds * 1000 - Date.now()) / 60000);
+    const abs = Math.abs(diffMin);
+    if (abs < 3) return "gerade eben";
+    let amount;
+    if (abs < 60) {
+      amount = abs + " Min.";
+    } else {
+      const h = Math.floor(abs / 60);
+      const m = abs % 60;
+      amount = h + " Std." + (m ? " " + m + " Min." : "");
+    }
+    return diffMin < 0 ? "vor " + amount : "in " + amount;
+  }
+
+  /** Kompletter Text für das Zeitlabel, z. B. „14:50 · Prognose · in 20 Min.“ */
+  function frameLabel(frame) {
+    const parts = [formatClock(frame.time)];
+    if (frame.isForecast) parts.push("Prognose");
+    parts.push(relativeText(frame.time));
+    return parts.join(" · ");
+  }
+
+  function setStatus(text) {
+    if (state.els.status) state.els.status.textContent = text || "";
+  }
+
+  // ---------------------------------------------------------------------
+  // Bedienelemente (Play-Knopf, Slider, Zeitlabel)
+  // ---------------------------------------------------------------------
+
+  /** Play-Knopf passend zum Zustand beschriften (Symbol + Text für VoiceOver). */
+  function updatePlayButton() {
+    const btn = state.els.play;
+    if (!btn) return;
+    btn.textContent = state.playing ? "⏸" : "▶";
+    btn.setAttribute(
+      "aria-label",
+      state.playing ? "Radar-Animation anhalten" : "Radar-Animation abspielen"
+    );
+    btn.setAttribute("aria-pressed", state.playing ? "true" : "false");
+  }
+
+  /** Bedienelemente an- oder abschalten (z. B. wenn es keine Frames gibt). */
+  function setControlsEnabled(enabled) {
+    if (state.els.play) state.els.play.disabled = !enabled;
+    if (state.els.slider) state.els.slider.disabled = !enabled;
+  }
+
+  /** Slider-Grenzen an die Anzahl der Frames anpassen. */
+  function updateSliderRange() {
+    const slider = state.els.slider;
+    if (!slider) return;
+    slider.min = "0";
+    slider.max = String(Math.max(0, state.frames.length - 1));
+    slider.step = "1";
+  }
+
+  // ---------------------------------------------------------------------
+  // Frames anzeigen
+  // ---------------------------------------------------------------------
+
+  /** Kachel-Ebene (und Ladezustand) für ein Frame holen. */
+  function entryFor(i) {
+    const frame = state.frames[i];
+    return frame ? state.layers.get(frame.path) : null;
+  }
+
+  /** Frame Nummer i sichtbar machen, alle anderen unsichtbar. */
+  function showFrame(i) {
+    if (i < 0 || i >= state.frames.length) return;
+    const old = entryFor(state.index);
+    if (old && state.index !== i) old.layer.setOpacity(0);
+    state.index = i;
+    const cur = entryFor(i);
+    if (cur) cur.layer.setOpacity(CONFIG.radarOpacity);
+
+    const label = frameLabel(state.frames[i]);
+    if (state.els.time) state.els.time.textContent = label;
+    if (state.els.slider) {
+      state.els.slider.value = String(i);
+      state.els.slider.setAttribute("aria-valuetext", label);
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Animation
+  // ---------------------------------------------------------------------
+
+  /** Nächsten Animationsschritt einplanen. */
+  function schedule(delay) {
+    clearTimeout(state.timer);
+    state.timer = setTimeout(step, delay);
+  }
+
+  /** Ein Animationsschritt: zum nächsten Frame weiterschalten. */
+  function step() {
+    if (!state.playing || state.frames.length === 0) return;
+    // Nach dem letzten Bild geht es wieder vorne los.
+    const next = state.index + 1 >= state.frames.length ? 0 : state.index + 1;
+
+    // Lädt das nächste Bild noch? Dann kurz warten statt ein leeres Bild
+    // zu zeigen (das würde flackern). Nach ein paar Versuchen trotzdem
+    // weiter, damit ein kaputtes Bild die Animation nicht blockiert.
+    const entry = entryFor(next);
+    if (entry && !entry.loaded && state.waits < CONFIG.maxLoadWaits) {
+      state.waits++;
+      schedule(CONFIG.frameDelay);
+      return;
+    }
+    state.waits = 0;
+    showFrame(next);
+    // Auf dem letzten Bild etwas länger stehen bleiben.
+    schedule(next === state.frames.length - 1 ? CONFIG.endPause : CONFIG.frameDelay);
+  }
+
+  function play() {
+    if (state.playing || state.frames.length < 2) return;
+    state.playing = true;
+    state.waits = 0;
+    updatePlayButton();
+    // Steht man gerade am Ende, nach der Pause von vorn beginnen.
+    schedule(state.index >= state.frames.length - 1 ? CONFIG.endPause / 2 : CONFIG.frameDelay);
+  }
+
+  function pause() {
+    state.playing = false;
+    clearTimeout(state.timer);
+    state.timer = null;
+    updatePlayButton();
+  }
+
+  function togglePlay() {
+    if (state.playing) pause();
+    else play();
+  }
+
+  /** Tab im Hintergrund → anhalten (spart Akku und Datenvolumen). */
+  function onVisibilityChange() {
+    if (document.hidden) {
+      state.resumeOnVisible = state.playing;
+      pause();
+    } else {
+      // Wieder sichtbar: Zeiten aktualisieren und ggf. weiterspielen.
+      if (state.index >= 0) showFrame(state.index);
+      if (state.resumeOnVisible) play();
+      state.resumeOnVisible = false;
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // RainViewer-Daten laden
+  // ---------------------------------------------------------------------
+
+  /** fetch mit Zeitlimit (AbortController), liefert das JSON. */
+  async function fetchJson(url) {
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timeout = controller ? setTimeout(() => controller.abort(), CONFIG.fetchTimeout) : null;
+    try {
+      const res = await fetch(url, controller ? { signal: controller.signal } : undefined);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return await res.json();
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  /** Antwort von RainViewer prüfen und in unsere Frameliste umwandeln. */
+  function parseFrames(data) {
+    const valid = (f) => f && typeof f.time === "number" && typeof f.path === "string";
+    const radar = (data && data.radar) || {};
+    const past = (Array.isArray(radar.past) ? radar.past : []).filter(valid);
+    const nowcast = (Array.isArray(radar.nowcast) ? radar.nowcast : []).filter(valid);
+    return {
+      host: data && typeof data.host === "string" ? data.host : "",
+      frames: past
+        .map((f) => ({ time: f.time, path: f.path, isForecast: false }))
+        .concat(nowcast.map((f) => ({ time: f.time, path: f.path, isForecast: true }))),
+      pastCount: past.length,
+    };
+  }
+
+  /** Kachel-Ebene für ein Frame anlegen (unsichtbar, lädt aber schon). */
+  function createLayer(frame) {
+    const layer = L.tileLayer(state.host + frame.path + CONFIG.radarTileSuffix, {
+      opacity: 0,
+      zIndex: 10,
+      tileSize: 256,
+      maxNativeZoom: CONFIG.radarMaxNativeZoom,
+      maxZoom: CONFIG.maxZoom,
+      attribution: CONFIG.radarAttribution,
+    });
+    const entry = { layer: layer, loaded: false };
+    // „loading“: Leaflet beginnt Kacheln zu laden (auch nach Verschieben der Karte),
+    // „load“: alle sichtbaren Kacheln dieser Ebene sind da.
+    layer.on("loading", () => (entry.loaded = false));
+    layer.on("load", () => (entry.loaded = true));
+    layer.addTo(state.map);
+    return entry;
+  }
+
+  /**
+   * Frameliste laden (beim Start und dann alle 10 Minuten).
+   * Bereits vorhandene Ebenen werden weiterverwendet, veraltete entfernt.
+   */
+  async function loadFrames() {
+    if (!state.map) return;
+    let parsed;
+    try {
+      parsed = parseFrames(await fetchJson(CONFIG.framesUrl));
+    } catch (err) {
+      // Gibt es schon Bilder, bleiben die stehen – nur ein Hinweis.
+      setStatus(
+        state.frames.length
+          ? "Radar konnte nicht aktualisiert werden"
+          : "Radar momentan nicht erreichbar"
+      );
+      if (!state.frames.length) setControlsEnabled(false);
+      return;
+    }
+    if (!parsed.host || parsed.frames.length === 0) {
+      if (!state.frames.length) {
+        setStatus("Keine Radardaten verfügbar");
+        setControlsEnabled(false);
+      }
+      return;
+    }
+
+    // Merken, was gerade angezeigt wird, um die Position zu behalten.
+    const wasAtLastPast = state.index === state.lastPastIndex;
+    const currentTime = state.index >= 0 ? state.frames[state.index].time : null;
+    const wasPlaying = state.playing;
+    pause();
+
+    // Hat sich der Server geändert, alle alten Ebenen verwerfen.
+    if (parsed.host !== state.host) {
+      state.layers.forEach((e) => state.map.removeLayer(e.layer));
+      state.layers.clear();
+    }
+    state.host = parsed.host;
+
+    // Nicht mehr benötigte Ebenen entfernen, neue anlegen.
+    const neededPaths = new Set(parsed.frames.map((f) => f.path));
+    state.layers.forEach((entry, path) => {
+      if (!neededPaths.has(path)) {
+        state.map.removeLayer(entry.layer);
+        state.layers.delete(path);
+      }
+    });
+    state.frames = parsed.frames;
+    state.frames.forEach((f) => {
+      if (!state.layers.has(f.path)) state.layers.set(f.path, createLayer(f));
+      else state.layers.get(f.path).layer.setOpacity(0);
+    });
+
+    // Startposition: letztes GEMESSENES Bild (nicht die Prognose).
+    state.lastPastIndex = parsed.pastCount > 0 ? parsed.pastCount - 1 : 0;
+    let target = state.lastPastIndex;
+    if (!wasAtLastPast && currentTime !== null) {
+      const same = state.frames.findIndex((f) => f.time === currentTime);
+      if (same >= 0) target = same;
+    }
+    state.index = -1;
+    updateSliderRange();
+    setControlsEnabled(true);
+    if (state.els.play) state.els.play.disabled = state.frames.length < 2;
+    showFrame(target);
+    setStatus("");
+    if (wasPlaying) play();
+  }
+
+  // ---------------------------------------------------------------------
+  // Karte, Marker, Legende, Fallback
+  // ---------------------------------------------------------------------
+
+  /** Freundlicher Hinweis, wenn Leaflet nicht geladen werden konnte. */
+  function showFallback(mapEl) {
+    if (mapEl) {
+      mapEl.innerHTML = "";
+      const hint = document.createElement("div");
+      hint.className = "radar-fallback";
+      hint.setAttribute("role", "note");
+      hint.textContent =
+        "Radarkarte konnte nicht geladen werden. Bitte Internetverbindung prüfen und die Seite neu laden.";
+      // Minimal-Styling direkt am Element, damit es ohne eigenes CSS gut aussieht.
+      hint.style.cssText =
+        "display:flex;align-items:center;justify-content:center;text-align:center;" +
+        "height:100%;min-height:120px;padding:16px;box-sizing:border-box;" +
+        "font-size:14px;line-height:1.4;opacity:0.85;";
+      mapEl.appendChild(hint);
+    }
+    setControlsEnabled(false);
+    if (state.els.time) state.els.time.textContent = "";
+    setStatus("");
+  }
+
+  /**
+   * Farblegende „leicht → stark“ unter der Karte einfügen.
+   * Die Farben entsprechen ungefähr RainViewer-Farbschema 2 („Universal Blue“):
+   * hellblau = leichter Regen … gelb/orange … rot/violett = sehr starker Regen.
+   */
+  function addLegend(mapEl) {
+    const parent = mapEl && mapEl.parentNode;
+    if (!parent || parent.querySelector(".radar-legend")) return; // nicht doppelt
+    const legend = document.createElement("div");
+    legend.className = "radar-legend";
+    legend.setAttribute("aria-hidden", "true"); // rein optisch
+    legend.style.cssText =
+      "display:flex;align-items:center;gap:8px;margin:6px 0 2px;font-size:12px;opacity:0.85;";
+
+    const low = document.createElement("span");
+    low.className = "radar-legend-label";
+    low.textContent = "leicht";
+    const bar = document.createElement("span");
+    bar.className = "radar-legend-bar";
+    bar.style.cssText =
+      "flex:1;height:8px;border-radius:4px;" +
+      "background:linear-gradient(90deg,#88ddee,#0099cc,#005588,#ffee00,#ffaa00,#ff4400,#c10000,#ff77ff);";
+    const high = document.createElement("span");
+    high.className = "radar-legend-label";
+    high.textContent = "stark";
+
+    legend.append(low, bar, high);
+    parent.insertBefore(legend, mapEl.nextSibling); // direkt unter die Karte
+  }
+
+  /** Marker und Kartenausschnitt für den gespeicherten Ort setzen. */
+  function applyLocation() {
+    const loc = state.location;
+    if (!state.map || !loc) return;
+    const latlng = [loc.lat, loc.lon];
+    const name = loc.name || "Standort";
+    if (!state.marker) {
+      // Gut sichtbarer Punkt: weißer Rand, kräftige Füllung.
+      state.marker = L.circleMarker(latlng, {
+        radius: 8,
+        color: "#ffffff",
+        weight: 3,
+        fillColor: "#ff3b30",
+        fillOpacity: 1,
+      }).addTo(state.map);
+      // Dauerhaft sichtbarer Tooltip – auf dem iPad gibt es kein „Hover“.
+      state.marker.bindTooltip(name, { permanent: true, direction: "top", offset: [0, -10] });
+    } else {
+      state.marker.setLatLng(latlng);
+      state.marker.setTooltipContent(name);
+    }
+    state.map.setView(latlng, CONFIG.startZoom);
+  }
+
+  // ---------------------------------------------------------------------
+  // Öffentliche Funktionen
+  // ---------------------------------------------------------------------
+
+  /**
+   * Karte bauen und Bedienelemente verdrahten. Mehrfacher Aufruf schadet nicht.
+   * @param {string} [containerId] "radar" oder "radar-map" – beides geht.
+   */
+  function init(containerId) {
+    if (state.initialized) {
+      invalidateSize();
+      return;
+    }
+    state.initialized = true;
+
+    // Kartenelement finden: entweder ist containerId selbst #radar-map,
+    // oder #radar-map liegt darin (bzw. irgendwo im Dokument).
+    const root = containerId ? document.getElementById(containerId) : null;
+    const mapEl =
+      (root && root.id === "radar-map" && root) ||
+      (root && root.querySelector("#radar-map")) ||
+      document.getElementById("radar-map") ||
+      root;
+
+    state.els = {
+      map: mapEl,
+      play: document.getElementById("radar-play"),
+      slider: document.getElementById("radar-slider"),
+      time: document.getElementById("radar-time"),
+      status: document.getElementById("radar-status"),
+    };
+    updatePlayButton();
+
+    // Ohne Leaflet keine Karte – Hinweis zeigen, aber NICHT abstürzen.
+    if (typeof L === "undefined" || !L || typeof L.map !== "function" || !mapEl) {
+      showFallback(mapEl);
+      return;
+    }
+
+    try {
+      const loc = state.location;
+      state.map = L.map(mapEl, {
+        center: loc ? [loc.lat, loc.lon] : CONFIG.defaultCenter,
+        zoom: CONFIG.startZoom,
+        minZoom: CONFIG.minZoom,
+        maxZoom: CONFIG.maxZoom,
+        zoomControl: true,
+        attributionControl: true,
+      });
+      L.tileLayer(CONFIG.baseUrl, {
+        subdomains: "abcd",
+        maxZoom: CONFIG.maxZoom,
+        attribution: CONFIG.baseAttribution,
+      }).addTo(state.map);
+    } catch (err) {
+      console.error("Radarkarte:", err);
+      state.map = null;
+      showFallback(mapEl);
+      return;
+    }
+
+    addLegend(mapEl);
+    applyLocation(); // falls setLocation schon vorher aufgerufen wurde
+
+    // Bedienelemente verdrahten
+    setControlsEnabled(false); // erst wenn Frames da sind
+    if (state.els.play) state.els.play.addEventListener("click", togglePlay);
+    if (state.els.slider) {
+      state.els.slider.addEventListener("input", () => {
+        pause(); // wer schiebt, will selbst steuern
+        showFrame(Number(state.els.slider.value));
+      });
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    // Frames laden und alle 10 Minuten aktualisieren (nur EIN Intervall).
+    setStatus("Radar wird geladen …");
+    loadFrames();
+    if (!state.refreshTimer) {
+      state.refreshTimer = setInterval(() => {
+        if (!document.hidden) loadFrames();
+      }, CONFIG.refreshInterval);
+    }
+  }
+
+  /**
+   * Ort setzen: Karte zentrieren (Zoom 8) und Marker setzen.
+   * Darf auch VOR init aufgerufen werden – dann wird der Ort gemerkt.
+   * @param {number} lat
+   * @param {number} lon
+   * @param {string} [name]               Ortsname für den Tooltip
+   * @param {number} [utcOffsetSeconds]   optional: Uhrzeiten in Ortszeit anzeigen
+   */
+  function setLocation(lat, lon, name, utcOffsetSeconds) {
+    if (typeof lat !== "number" || typeof lon !== "number" || isNaN(lat) || isNaN(lon)) return;
+    state.location = {
+      lat: lat,
+      lon: lon,
+      name: name || "",
+      utcOffsetSeconds: typeof utcOffsetSeconds === "number" ? utcOffsetSeconds : undefined,
+    };
+    try {
+      applyLocation();
+      if (state.index >= 0) showFrame(state.index); // Uhrzeit ggf. in Ortszeit
+    } catch (err) {
+      console.error("Radar setLocation:", err);
+    }
+  }
+
+  /** Nach Größenänderung des Containers die Karte neu vermessen lassen. */
+  function invalidateSize() {
+    if (state.map) state.map.invalidateSize();
+  }
+
+  window.Wetter.radar = {
+    init: init,
+    setLocation: setLocation,
+    invalidateSize: invalidateSize,
+  };
+})();

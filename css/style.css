@@ -1,0 +1,984 @@
+/*
+ * style.css – Aussehen der Wetter-App
+ * ====================================
+ *
+ * Aufbau dieser Datei (von oben nach unten):
+ *   1. Variablen (Farben, Abstände) – an einer Stelle änderbar
+ *   2. Grundlagen (Schrift, Hintergrund-Verlauf je Wetter)
+ *   3. Bausteine: Glas-Karten, Buttons
+ *   4. Die einzelnen Bereiche (Sidebar, Aktuell, Nowcast, Stündlich, 7 Tage, Radar)
+ *   5. Layout je Bildschirmgröße (Media Queries):
+ *        - Grundlage: iPhone hoch, 1 Spalte (< 700 px)       „Mobile first“
+ *        - iPad hoch / mittlere Breiten: 2 Spalten (700 px +)
+ *        - iPad quer: 3 Spalten ohne Seiten-Scroll (≥ 1024 px, Querformat)
+ *
+ * „Mobile first“ heißt: Die Regeln ohne Media Query gelten fürs kleinste Gerät.
+ * Größere Bildschirme bekommen weiter unten zusätzliche/überschreibende Regeln.
+ */
+
+/* ------------------------------------------------------------------ */
+/* 1. Variablen                                                        */
+/* ------------------------------------------------------------------ */
+:root {
+  /* Glas-Kacheln: leicht dunkle, halbtransparente Fläche + Unschärfe */
+  --glass: rgba(16, 28, 48, 0.22);
+  --glass-strong: rgba(16, 28, 48, 0.34);
+  --glass-border: rgba(255, 255, 255, 0.14);
+  --glass-blur: blur(22px) saturate(150%);
+
+  /* Schriftfarben: weiß und abgestuft heller/dunkler */
+  --text: #fff;
+  --text-dim: rgba(255, 255, 255, 0.72);
+  --text-faint: rgba(255, 255, 255, 0.5);
+  --line: rgba(255, 255, 255, 0.16);
+  --rain: #7cc7ff;           /* Farbe für Regen-Angaben */
+
+  --radius: 18px;            /* Rundung der Karten */
+  --radius-sm: 12px;
+  --gap: 12px;               /* Abstand zwischen Karten */
+
+  /* Schriften: auf Apple-Geräten die Systemschrift „SF Pro“ */
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+          "Helvetica Neue", "Segoe UI", Roboto, Arial, sans-serif;
+
+  /* Abstände zum Rand inkl. „Safe Area“ (Notch, Home-Balken).
+     env() liefert auf Geräten ohne Notch 0px – max() sorgt für Mindestabstand. */
+  --pad-top: max(12px, env(safe-area-inset-top));
+  --pad-right: max(12px, env(safe-area-inset-right));
+  --pad-bottom: max(12px, env(safe-area-inset-bottom));
+  --pad-left: max(12px, env(safe-area-inset-left));
+
+  /* Hintergrund-Verlauf: Standard (wird je Wetter überschrieben) */
+  --bg-top: #3a7bd5;
+  --bg-bottom: #8fbfe8;
+}
+
+/* ------------------------------------------------------------------ */
+/* 2. Grundlagen                                                       */
+/* ------------------------------------------------------------------ */
+
+/* box-sizing: border-box = Breite enthält Innenabstand und Rand (rechnet sich leichter) */
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  /* verhindert, dass iOS beim Drehen die Schrift automatisch vergrößert */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  background: var(--bg-top);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100dvh;   /* dvh = sichtbare Höhe (berücksichtigt Safari-Leisten) */
+  font-family: var(--font);
+  color: var(--text);
+  line-height: 1.35;
+  /* Farbverlauf als Hintergrund – Farben kommen aus den Variablen */
+  background-color: var(--bg-top);
+  background-image: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+  background-attachment: fixed;
+  /* kein grauer Blitz beim Antippen auf iOS */
+  -webkit-tap-highlight-color: transparent;
+  overflow-x: hidden;   /* nie seitlich scrollen */
+  transition: background-color 0.6s ease;
+}
+
+/* Hintergrund je Wettergruppe (Klasse am body, gesetzt von app.js).
+   Jeweils oben/unten-Farbe für Tag … */
+body.wx-clear   { --bg-top: #2a74c9; --bg-bottom: #75b6ee; }
+body.wx-partly  { --bg-top: #3b6fa8; --bg-bottom: #86aed3; }
+body.wx-cloudy  { --bg-top: #56677d; --bg-bottom: #8d9bad; }
+body.wx-fog     { --bg-top: #6b7682; --bg-bottom: #a3abb4; }
+body.wx-drizzle { --bg-top: #4a5c72; --bg-bottom: #7a8ca0; }
+body.wx-rain    { --bg-top: #3c4d63; --bg-bottom: #697d94; }
+body.wx-snow    { --bg-top: #6a7f9c; --bg-bottom: #aab9cc; }
+body.wx-storm   { --bg-top: #2b3142; --bg-bottom: #4f566b; }
+
+/* … und für die Nacht (zusätzliche Klasse is-night). */
+body.is-night.wx-clear   { --bg-top: #070f2b; --bg-bottom: #1f3366; }
+body.is-night.wx-partly  { --bg-top: #0f1c3a; --bg-bottom: #2d3f66; }
+body.is-night.wx-cloudy  { --bg-top: #1b212c; --bg-bottom: #3a4352; }
+body.is-night.wx-fog     { --bg-top: #22272f; --bg-bottom: #474f5c; }
+body.is-night.wx-drizzle { --bg-top: #141b27; --bg-bottom: #2f3a4c; }
+body.is-night.wx-rain    { --bg-top: #10161f; --bg-bottom: #2b3546; }
+body.is-night.wx-snow    { --bg-top: #1f2a40; --bg-bottom: #47566f; }
+body.is-night.wx-storm   { --bg-top: #0b0d14; --bg-bottom: #262a38; }
+
+/* Bei hellen Hintergründen (Nebel, Schnee am Tag) die Glasflächen etwas
+   dunkler machen, damit die weiße Schrift gut lesbar bleibt. */
+body.wx-fog:not(.is-night),
+body.wx-snow:not(.is-night) {
+  --glass: rgba(20, 30, 45, 0.3);
+  --glass-strong: rgba(20, 30, 45, 0.42);
+}
+
+a { color: inherit; }
+
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+
+/* Sichtbarer Fokusrahmen für Tastatur-Bedienung */
+:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.85);
+  outline-offset: 2px;
+}
+
+/* Nur für Screenreader sichtbar (z. B. Beschriftung des Suchfelds) */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* hidden-Attribut immer respektieren, auch wenn display gesetzt ist */
+[hidden] { display: none !important; }
+
+/* ------------------------------------------------------------------ */
+/* 3. Bausteine                                                        */
+/* ------------------------------------------------------------------ */
+
+/* Glas-Karte: halbtransparent + Unschärfe dessen, was dahinter liegt.
+   -webkit-backdrop-filter ist für Safari nötig. */
+.card,
+.detail-tile,
+#sidebar {
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+}
+
+.card {
+  padding: 12px 14px;
+  min-width: 0;   /* wichtig in Grid/Flex: darf schmaler als der Inhalt werden */
+}
+
+/* Kleine Überschrift oben in jeder Karte (wie bei Apple: klein, gedimmt) */
+.card-title {
+  margin: 0 0 8px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* Runder „Pillen“-Knopf */
+.pill-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;             /* Touch-Ziel mind. 44 px */
+  padding: 0 16px;
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  font-size: 15px;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+.pill-btn:hover { background: rgba(255, 255, 255, 0.22); }
+.pill-btn:active { background: rgba(255, 255, 255, 0.3); }
+.pill-btn:disabled { opacity: 0.6; cursor: progress; }
+
+/* ------------------------------------------------------------------ */
+/* 4a. Seitengerüst                                                    */
+/* ------------------------------------------------------------------ */
+
+#app {
+  display: grid;
+  gap: var(--gap);
+  padding: var(--pad-top) var(--pad-right) 0 var(--pad-left);
+  /* iPhone: eine Spalte, Bereiche untereinander */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "sidebar"
+    "main"
+    "side";
+}
+
+#sidebar { grid-area: sidebar; }
+#main    { grid-area: main; }
+#side    { grid-area: side; }
+
+#main, #side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  min-width: 0;
+}
+
+.footer {
+  margin: 0;
+  padding: 10px var(--pad-right) var(--pad-bottom) var(--pad-left);
+  font-size: 11px;
+  color: var(--text-faint);
+  text-align: center;
+}
+.footer a { color: var(--text-dim); }
+
+/* ------------------------------------------------------------------ */
+/* 4b. Sidebar: Suche, Standort, Favoriten                             */
+/* ------------------------------------------------------------------ */
+
+#sidebar {
+  padding: 10px;
+  position: relative;
+  z-index: 5;  /* Suchergebnisse sollen über den anderen Karten liegen */
+}
+
+/* Auf-/Zuklapp-Knopf (nur iPhone) */
+.sidebar-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  font-size: 16px;
+  font-weight: 600;
+  text-align: left;
+}
+.sidebar-toggle-text { flex: 1; }
+.sidebar-toggle-chevron { transition: transform 0.25s; }
+#sidebar.is-open .sidebar-toggle-chevron { transform: rotate(180deg); }
+
+/* iPhone: eingeklappt ist nur der Knopf sichtbar */
+.sidebar-body { display: none; padding-top: 8px; }
+#sidebar.is-open .sidebar-body { display: block; }
+
+#search-form { position: relative; margin: 0 0 10px; }
+
+#search-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.16);
+  font-size: 16px;   /* ≥ 16 px verhindert das automatische Zoomen von iOS */
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+#search-input::placeholder { color: var(--text-faint); }
+#search-input:focus { background: rgba(255, 255, 255, 0.24); border-color: rgba(255, 255, 255, 0.4); }
+
+/* Trefferliste: schwebt unter dem Suchfeld */
+.search-results {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border);
+  /* hier bewusst fast undurchsichtig, damit man die Treffer gut lesen kann */
+  background: rgba(22, 32, 50, 0.92);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+
+.search-result {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+}
+.search-result:hover,
+.search-result:focus-visible,
+.search-result.is-active { background: rgba(255, 255, 255, 0.14); outline: none; }
+.search-result-name { display: block; font-weight: 600; }
+.search-result-sub { display: block; font-size: 13px; color: var(--text-dim); }
+
+.search-info {
+  padding: 10px;
+  font-size: 14px;
+  color: var(--text-dim);
+}
+
+#locate-btn { width: 100%; }
+
+.sidebar-heading {
+  margin: 16px 4px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.favorites-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.favorites-list li { display: flex; align-items: stretch; gap: 4px; }
+
+.fav-item {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.1);
+  text-align: left;
+}
+.fav-item:hover { background: rgba(255, 255, 255, 0.17); }
+/* aktuell angezeigter Ort */
+.fav-item[aria-current="true"] {
+  background: rgba(255, 255, 255, 0.24);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+.fav-name, .fav-sub {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fav-name { font-weight: 600; font-size: 15px; }
+.fav-sub { font-size: 12px; color: var(--text-dim); }
+
+.fav-remove {
+  flex: none;
+  width: 44px;
+  min-height: 44px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 16px;
+}
+.fav-remove:hover { background: rgba(255, 80, 80, 0.25); color: #fff; }
+
+.fav-empty {
+  padding: 8px 6px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+/* ------------------------------------------------------------------ */
+/* 4c. Aktuelles Wetter                                                */
+/* ------------------------------------------------------------------ */
+
+#current { min-width: 0; }
+
+.current-head {
+  text-align: center;
+  padding: 4px 0 10px;
+  /* leichter Schatten, damit Schrift auch auf hellem Verlauf lesbar bleibt */
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.18);
+}
+
+.loc-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+#loc-name {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 500;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.fav-toggle {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  font-size: 24px;
+  line-height: 1;
+  color: var(--text-dim);
+  transition: transform 0.15s, color 0.2s;
+}
+.fav-toggle:hover { background: rgba(255, 255, 255, 0.12); }
+.fav-toggle:active { transform: scale(0.88); }
+.fav-toggle[aria-pressed="true"] { color: #ffd60a; }   /* gelber Stern */
+
+.loc-sub {
+  margin: 0;
+  min-height: 1.35em;
+  font-size: 14px;
+  color: var(--text-dim);
+}
+
+.current-main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.current-icon { font-size: 54px; line-height: 1; }
+
+/* Die große, dünne Temperatur – das Markenzeichen von Apple Wetter */
+.current-temp {
+  font-size: 88px;
+  font-weight: 200;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  /* Das Grad-Zeichen soll die Zahl nicht aus der Mitte schieben */
+  padding-left: 0.2em;
+}
+
+.current-desc {
+  margin: 4px 0 0;
+  font-size: 19px;
+  font-weight: 500;
+}
+
+.current-hilo {
+  margin: 2px 0 0;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.current-updated {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-faint);
+  min-height: 1.35em;
+}
+
+/* Detailkacheln: Raster mit 4 Spalten (iPhone: 2 Spalten, siehe unten) */
+.details-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.detail-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 9px 11px;
+  border-radius: 14px;
+}
+
+.tile-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tile-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.tile-unit { font-size: 13px; font-weight: 500; color: var(--text-dim); }
+
+.tile-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Windpfeil (SVG), wird per transform: rotate() gedreht */
+.wind-arrow {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  transition: transform 0.4s ease;
+}
+
+/* ------------------------------------------------------------------ */
+/* 4d. Nowcast (Regen in den nächsten 3 Stunden)                       */
+/* ------------------------------------------------------------------ */
+
+.nowcast-text {
+  margin: 0 0 10px;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+/* 12 Balken nebeneinander, jeder bekommt gleich viel Platz */
+.nowcast-bars {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  column-gap: 4px;
+  align-items: end;
+}
+
+.nc-col {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 0;
+}
+
+/* „Schiene“, in der der Balken von unten wächst */
+.nc-track {
+  position: relative;
+  height: 44px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.nc-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 5px;
+  background: linear-gradient(180deg, #a9dcff 0%, #3d9bff 100%);
+  transition: height 0.4s ease;
+}
+.nc-fill.is-heavy { background: linear-gradient(180deg, #8fb2ff 0%, #4157ff 100%); }
+
+.nc-label {
+  height: 16px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: visible;   /* Beschriftung darf über die schmale Spalte hinausragen */
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------ */
+/* 4e. Stündliche Vorhersage                                           */
+/* ------------------------------------------------------------------ */
+
+/* Breite einer Stundenspalte – app.js nutzt denselben Wert für die Kurve */
+#hourly { --hour-w: 56px; }
+
+/* Kurve und Leiste scrollen gemeinsam (app.js gleicht die Position ab).
+   Die Scrollleiste der Kurve blenden wir aus. */
+.hourly-chart {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.hourly-chart::-webkit-scrollbar { display: none; }
+.hourly-chart svg { display: block; }
+
+.hourly-strip {
+  display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+  padding-bottom: 4px;
+  outline-offset: 4px;
+}
+
+.hour {
+  flex: 0 0 var(--hour-w);
+  width: var(--hour-w);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 0;
+  scroll-snap-align: start;
+  font-variant-numeric: tabular-nums;
+}
+
+.hour-time { font-size: 12px; font-weight: 600; color: var(--text-dim); white-space: nowrap; }
+.hour.is-now .hour-time { color: var(--text); }
+.hour-icon { font-size: 22px; line-height: 1.25; }
+.hour-prob { font-size: 11px; font-weight: 600; color: var(--rain); min-height: 1.3em; }
+.hour-prob.is-low { opacity: 0.4; }
+.hour-temp { font-size: 16px; font-weight: 500; }
+
+/* SVG-Teile der Kurve */
+.chart-line { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.chart-dot { fill: #fff; }
+.chart-label { fill: #fff; font-size: 11px; font-weight: 600; font-family: var(--font); }
+.chart-label.is-min { fill: rgba(255, 255, 255, 0.8); }
+.chart-rain { fill: rgba(124, 199, 255, 0.35); }
+
+/* ------------------------------------------------------------------ */
+/* 4f. 7-Tage-Vorhersage                                               */
+/* ------------------------------------------------------------------ */
+
+.daily-list { margin: 0; padding: 0; list-style: none; }
+
+/* Eine Zeile: Tag | Symbol (+ Regen %) | Min | Balken | Max */
+.day {
+  display: grid;
+  grid-template-columns: 3.2em 2.6em 2.6em minmax(40px, 1fr) 2.6em;
+  align-items: center;
+  column-gap: 8px;
+  min-height: 42px;
+  border-top: 1px solid var(--line);
+  font-size: 16px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.day:first-child { border-top: 0; }
+
+.day-name { white-space: nowrap; }
+.day-icon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.1;
+}
+.day-emoji { font-size: 20px; }
+.day-prob { font-size: 10px; font-weight: 700; color: var(--rain); }
+.day-min { text-align: right; color: var(--text-dim); }
+.day-max { text-align: right; }
+
+/* Temperaturbalken: graue Schiene, farbiger Abschnitt von Min bis Max.
+   Lage und Breite setzt app.js in Prozent der Wochenspanne. */
+.temp-bar {
+  position: relative;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.18);
+}
+.temp-bar-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 3px;
+  /* Der Verlauf ist so breit wie die GANZE Wochen-Skala (siehe app.js),
+     dadurch hat jede Temperatur immer dieselbe Farbe. */
+  background-repeat: no-repeat;
+}
+/* Punkt für die aktuelle Temperatur (nur heute) */
+.temp-bar-now {
+  position: absolute;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25);
+}
+
+/* ------------------------------------------------------------------ */
+/* 4g. Radar                                                           */
+/* ------------------------------------------------------------------ */
+
+#radar { display: flex; flex-direction: column; }
+
+.radar-map {
+  position: relative;
+  height: 320px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.2);
+  /* Hinweistext (falls die Karte nicht geladen werden kann) mittig */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 14px;
+  padding: 0;
+  z-index: 0;   /* eigene Ebene: Leaflet-Ebenen bleiben unter Suchergebnissen */
+}
+/* Sobald Leaflet die Karte baut, braucht es normales Block-Layout */
+.radar-map.leaflet-container { display: block; }
+
+.radar-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.radar-play {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--glass-border);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.16);
+  font-size: 16px;
+}
+.radar-play:hover { background: rgba(255, 255, 255, 0.24); }
+
+.radar-slider {
+  flex: 1;
+  min-width: 0;
+  height: 44px;    /* großes Touch-Ziel */
+  margin: 0;
+  accent-color: #fff;
+  background: transparent;
+}
+
+.radar-time {
+  flex: none;
+  min-width: 5.5em;
+  text-align: right;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.radar-status {
+  margin: 4px 0 0;
+  min-height: 1.3em;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* Leaflet-Bedienelemente etwas an den Glas-Look anpassen */
+.radar-map .leaflet-control-attribution {
+  font-size: 9px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+/* ------------------------------------------------------------------ */
+/* 4h. Statusmeldung (Laden / Fehler) – schwebt unten in der Mitte     */
+/* ------------------------------------------------------------------ */
+
+.status {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--pad-bottom) + 28px);
+  transform: translateX(-50%);
+  z-index: 1000;   /* über der Leaflet-Karte */
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: rgba(20, 28, 42, 0.82);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  font-size: 14px;
+  font-weight: 500;
+}
+.status.is-error {
+  border-radius: 16px;
+  background: rgba(120, 28, 36, 0.88);
+}
+.status-text { min-width: 0; }
+
+.status-retry {
+  flex: none;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: #fff;
+  color: #1c1c1e;
+  font-weight: 600;
+}
+
+/* Kleines drehendes Lade-Symbol */
+.spinner {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Während des Ladens den Inhalt leicht abdunkeln (Klasse von app.js) */
+body.is-loading #main,
+body.is-loading #daily { opacity: 0.75; transition: opacity 0.3s; }
+
+/* Wer Animationen in den Systemeinstellungen reduziert hat, bekommt keine */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation-duration: 0.01ms !important; }
+}
+
+/* ================================================================== */
+/* 5. Layout je Bildschirmgröße                                        */
+/* ================================================================== */
+
+/* ---------- iPhone (< 700 px): Kleinigkeiten ---------- */
+@media (max-width: 699px) {
+  #loc-name { font-size: 32px; }
+  .current-temp { font-size: 96px; }
+  .radar-map { height: 300px; }
+}
+
+/* ---------- ab 700 px: iPad hoch, 2 Spalten, Sidebar als Leiste oben ---------- */
+@media (min-width: 700px) {
+  #app {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    grid-template-areas:
+      "sidebar sidebar"
+      "main    side";
+    align-items: start;
+  }
+
+  /* Klapp-Knopf nicht nötig – Inhalt immer sichtbar */
+  .sidebar-toggle { display: none; }
+  .sidebar-body,
+  #sidebar.is-open .sidebar-body {
+    display: grid;
+    padding-top: 0;
+    /* Suche | Standort-Knopf  in der ersten Zeile, Favoriten darunter */
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "search locate"
+      "favs   favs";
+    column-gap: 10px;
+    row-gap: 8px;
+    align-items: center;
+  }
+  #search-form { grid-area: search; margin: 0; }
+  #locate-btn { grid-area: locate; width: auto; }
+  .sidebar-heading { display: none; }  /* in der Leiste spart das Platz */
+
+  /* Favoriten als waagerechte, wischbare „Chips“ */
+  .favorites-list {
+    grid-area: favs;
+    flex-direction: row;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .favorites-list::-webkit-scrollbar { display: none; }
+  .favorites-list li { flex: none; max-width: 240px; }
+  .fav-item { padding: 4px 12px; border-radius: 999px; }
+  .fav-remove { border-radius: 999px; }
+  .fav-sub { display: none; }
+  .fav-item { display: flex; align-items: center; }
+
+  .details-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .radar-map { height: 380px; }
+}
+
+/* ---------- iPad quer (≥ 1024 px UND Querformat): 3 Spalten, kein Seiten-Scroll ---------- */
+@media (min-width: 1024px) and (orientation: landscape) {
+  /* Seite genau so hoch wie der Bildschirm: Gerüst (#app) füllt alles
+     bis auf die Fußzeile. Gescrollt wird nur INNERHALB der Spalten. */
+  body {
+    height: 100vh;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #app {
+    flex: 1;
+    min-height: 0;
+    /* Sidebar ~260 px | Hauptbereich flexibel | rechte Spalte ~380 px */
+    grid-template-columns: clamp(220px, 20vw, 270px) minmax(0, 1fr) clamp(340px, 30vw, 400px);
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: "sidebar main side";
+    align-items: stretch;
+  }
+
+  .footer { padding-top: 6px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+
+  /* Jede Spalte scrollt bei Bedarf für sich */
+  #sidebar, #main, #side {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+  }
+  #sidebar::-webkit-scrollbar,
+  #main::-webkit-scrollbar,
+  #side::-webkit-scrollbar { display: none; }
+
+  /* Suchergebnisse dürfen in der Sidebar nicht abgeschnitten werden:
+     Die Sidebar scrollt, also Liste normal im Fluss statt schwebend. */
+  #sidebar { padding: 12px; overflow-y: auto; }
+  .search-results {
+    position: static;
+    margin-top: 6px;
+    max-height: none;
+    box-shadow: none;
+  }
+
+  /* Sidebar wieder als senkrechte Liste (Regeln aus 700 px zurücksetzen) */
+  .sidebar-body,
+  #sidebar.is-open .sidebar-body {
+    display: block;
+  }
+  #search-form { margin: 0 0 10px; }
+  #locate-btn { width: 100%; }
+  .sidebar-heading { display: block; }
+  .favorites-list { flex-direction: column; overflow: visible; }
+  .favorites-list li { max-width: none; }
+  .fav-item { display: block; border-radius: var(--radius-sm); padding: 6px 12px; }
+  .fav-remove { border-radius: var(--radius-sm); }
+  .fav-sub { display: block; }
+
+  /* Rechte Spalte: 7 Tage oben, Radar füllt den Rest */
+  #daily { flex: none; }
+  #radar { flex: 1 1 auto; min-height: 300px; }
+  .radar-map { flex: 1 1 auto; height: auto; min-height: 200px; }
+
+  /* Hauptbereich etwas kompakter, damit alles auf 820 px Höhe passt */
+  .current-head { padding: 0 0 8px; }
+  .current-temp { font-size: 80px; }
+  .current-icon { font-size: 48px; }
+  .details-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* Großes iPad quer (z. B. 1366 × 1024): mehr Luft und größere Schrift */
+@media (min-width: 1300px) and (min-height: 960px) and (orientation: landscape) {
+  :root { --gap: 16px; }
+  #loc-name { font-size: 36px; }
+  .current-temp { font-size: 104px; }
+  .current-icon { font-size: 60px; }
+  .current-desc { font-size: 21px; }
+  .tile-value { font-size: 24px; }
+  .detail-tile { padding: 12px 14px; }
+  .nc-track { height: 60px; }
+  .day { min-height: 48px; font-size: 17px; }
+  .card { padding: 14px 16px; }
+}
