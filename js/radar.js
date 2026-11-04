@@ -27,15 +27,17 @@
  *      gemessene Bilder der Vergangenheit (radar.past) und – falls vorhanden –
  *      eine Kurzprognose (radar.nowcast). Jedes Frame hat {time, path}.
  *   3. Für jedes Frame legen wir eine eigene Kachel-Ebene (L.tileLayer) an
- *      und merken sie uns (Cache). Auf der Karte liegen aber höchstens ZWEI
- *      davon: das angezeigte Frame (opacity 0.75) und – nur während die
- *      Animation läuft – das nächste, unsichtbar (opacity 0) zum Vorladen.
- *      Warum? Leaflet lädt für JEDE Ebene auf der Karte bei jedem Verschieben
- *      und Zoomen neue Kacheln, auch für unsichtbare. Mit allen ~16 Ebenen
- *      wären das 16× so viele Anfragen an RainViewer.
+ *      und merken sie uns (Cache). Leaflet lädt für JEDE Ebene auf der Karte
+ *      bei jedem Verschieben und Zoomen Kacheln – auch für unsichtbare.
+ *      Deshalb liegen nur so wenige Ebenen wie nötig auf der Karte:
+ *        - Stillstand (Pause, Slider, Tab versteckt): nur das angezeigte Frame
+ *        - Wiedergabe: angezeigtes Frame + das nächste (unsichtbar, lädt vor);
+ *          schon gezeigte Frames bleiben unsichtbar liegen, damit ab der
+ *          zweiten Runde nichts mehr geladen werden muss
+ *        - Verschieben/Zoomen während der Wiedergabe: zurück auf
+ *          „angezeigt + nächstes“ (sonst würden alle neu laden)
  *   4. Die Animation schaltet reihum weiter: Das vorgeladene Frame wird
- *      sichtbar, das alte von der Karte genommen und das übernächste zum
- *      Vorladen hinzugefügt.
+ *      sichtbar (opacity 0.75), das vorige unsichtbar (opacity 0).
  *
  * Klassisches Skript (kein import/export): Alles hängt an window.Wetter.
  */
@@ -231,13 +233,20 @@ window.Wetter = window.Wetter || {};
   }
 
   /**
-   * Dafür sorgen, dass genau die richtigen Ebenen auf der Karte liegen:
-   * das angezeigte Frame (sichtbar) und – nur wenn die Animation läuft – das
-   * nächste (unsichtbar, lädt schon vor). Alle anderen kommen von der Karte;
-   * so lädt Leaflet beim Verschieben/Zoomen nur noch für höchstens 2 Ebenen
-   * Kacheln. Steht die Animation, reicht die eine angezeigte Ebene.
+   * Dafür sorgen, dass die richtigen Ebenen auf der Karte liegen:
+   *   - immer das angezeigte Frame (sichtbar, opacity 0.75)
+   *   - während die Animation läuft zusätzlich das nächste Frame
+   *     (unsichtbar, opacity 0) – es lädt schon vor
+   *   - während die Animation läuft, BLEIBEN außerdem alle Ebenen, die in
+   *     dieser Runde schon gezeigt wurden, unsichtbar auf der Karte. Ihre
+   *     Kacheln sind dann schon da: Ab der zweiten Runde läuft die Animation
+   *     ohne neue Kachelanfragen und ohne kurzes Leerbild.
+   * trim = true (bzw. keine Animation): alles außer „angezeigt“ (+ „nächstes“
+   * beim Abspielen) von der Karte nehmen. Steht die Animation, liegt also nur
+   * EINE Ebene auf der Karte – Leaflet lädt nur für Ebenen auf der Karte
+   * Kacheln, beim Verschieben/Zoomen also nur für diese eine.
    */
-  function syncLayers() {
+  function syncLayers(trim) {
     const wanted = new Map(); // Ebenen-Eintrag → gewünschte Deckkraft
     const cur = entryFor(state.index);
     if (cur) wanted.set(cur, CONFIG.radarOpacity);
@@ -245,15 +254,27 @@ window.Wetter = window.Wetter || {};
       const next = entryFor(nextIndex(state.index));
       if (next && !wanted.has(next)) wanted.set(next, 0);
     }
-    // Zuerst nicht mehr benötigte Ebenen entfernen …
+    const keepOthers = state.playing && !trim;
     state.layers.forEach((entry) => {
-      if (!wanted.has(entry)) removeEntry(entry);
+      if (wanted.has(entry)) return;
+      if (keepOthers && entry.onMap) entry.layer.setOpacity(0); // bleibt, unsichtbar
+      else removeEntry(entry);
     });
-    // … dann die gewünschten hinzufügen bzw. Deckkraft setzen.
+    // Gewünschte hinzufügen bzw. Deckkraft setzen.
     wanted.forEach((opacity, entry) => {
       entry.layer.setOpacity(opacity);
       addEntry(entry);
     });
+  }
+
+  /**
+   * Karte wird verschoben oder gezoomt, während die Animation läuft: Jetzt
+   * müssten ALLE Ebenen auf der Karte neue Kacheln laden. Sparsamer: auf
+   * „angezeigt + nächstes“ reduzieren; die übrigen werden in der nächsten
+   * Runde nach und nach wieder hinzugefügt.
+   */
+  function onMapMoveStart() {
+    if (state.playing) syncLayers(true);
   }
 
   /** Frame Nummer i anzeigen (Ebene sichtbar), Zeitlabel und Slider setzen. */
@@ -316,7 +337,7 @@ window.Wetter = window.Wetter || {};
     clearTimeout(state.timer);
     state.timer = null;
     updatePlayButton();
-    syncLayers(); // ohne Animation braucht es keine vorgeladene Ebene
+    syncLayers(true); // ohne Animation: nur noch die angezeigte Ebene
   }
 
   function togglePlay() {
@@ -608,6 +629,9 @@ window.Wetter = window.Wetter || {};
         zoomControl: true,
         attributionControl: true,
       });
+      // Verschieben/Zoomen während der Wiedergabe → Ebenen reduzieren
+      state.map.on("movestart", onMapMoveStart);
+      state.map.on("zoomstart", onMapMoveStart);
       L.tileLayer(CONFIG.baseUrl, {
         subdomains: "abcd",
         maxZoom: CONFIG.maxZoom,

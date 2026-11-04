@@ -152,6 +152,19 @@ Für die **Anzeige** zählt die Ortszeit des Wetterorts, nicht die des Geräts:
   Frame, markiert Vorhersage-Frames als „Prognose“. Aktualisiert die Frameliste
   alle 10 Minuten (nur bei sichtbarer Seite) und sofort beim Sichtbarwerden der
   Seite, wenn der letzte erfolgreiche Abruf älter als 5 Minuten ist.
+- Radar-Ebenen (eine `L.tileLayer` je Frame, als Objekt zwischengespeichert):
+  Leaflet lädt für **jede** Ebene auf der Karte Kacheln – auch für unsichtbare
+  und bei jedem Verschieben/Zoomen. Deshalb liegen nur so wenige wie nötig auf
+  der Karte (`map.addLayer` / `map.removeLayer`):
+  - **Stillstand** (Pause, Slider bedient, Seite versteckt): genau **eine**
+    Ebene – das angezeigte Frame (opacity 0.75).
+  - **Wiedergabe:** angezeigtes Frame + das nächste (opacity 0, lädt vor).
+    Bereits gezeigte Ebenen bleiben unsichtbar (opacity 0) liegen; ab der
+    zweiten Runde braucht die Animation daher keine neuen Kachelanfragen.
+  - **Verschieben/Zoomen während der Wiedergabe** (`movestart`/`zoomstart`):
+    zurück auf „angezeigt + nächstes“, sonst müssten alle Ebenen neu laden.
+  - Vor dem Weiterschalten wartet die Animation, bis die nächste Ebene
+    geladen ist (`load`), höchstens 5 × 600 ms.
 - `invalidateSize()` – nach Layoutwechsel (Drehen des Geräts) aufrufen.
 
 ### `Wetter.effects`
@@ -161,8 +174,22 @@ Für die **Anzeige** zählt die Ortszeit des Wetterorts, nicht die des Geräts:
   Niederschlag in **mm/h** (optional; `app.js` rechnet `current.precip` –
   mm pro 15 min – mal 4 um).
 - Zeichnet auf das Canvas `#wx-effects` (fest hinter allen Inhalten,
-  `pointer-events: none`). Pausiert bei unsichtbarer Seite, zeigt bei
-  „Bewegung reduzieren“ nur ein Standbild. Wirft nie einen Fehler.
+  `pointer-events: none`). Wirft nie einen Fehler.
+- Bildrate je Szene: **30 fps** bei fallenden Teilchen (Niesel, Regen, Schnee,
+  Hagel) und während eines Blitzes; **10 fps** in ruhigen Szenen (Sonne,
+  Sterne, Wolken, Nebel). Jedes Canvas-Bild zwingt den Browser, die
+  Glas-Kacheln (`backdrop-filter`) darüber neu zu verwischen – deshalb so sparsam.
+- Weiche Ebenen (Sonnenglühen, Wolkenschleier, Sterne) werden einmal
+  vorgezeichnet und pro Bild nur gestempelt; ruhige Szenen ohne Sterne und
+  Niederschlag zeichnen in 1×- statt Retina-Auflösung.
+- Pausiert bei unsichtbarer Seite (`document.hidden`); bei „Bewegung
+  reduzieren“ (`prefers-reduced-motion`) nur ein ruhiges Standbild ohne
+  Regen/Schnee/Blitze.
+- Größe: Ändert sich nur die Höhe um **weniger als 150 px** (Breite gleich,
+  z. B. Safari-Leiste beim Scrollen auf dem iPhone), bleibt die Szene erhalten
+  (nur die Canvas-Größe wird angepasst, kein Neuaufbau). Neue Breite (Drehen)
+  oder größere Höhenänderung → Szene wird neu aufgebaut.
+- `info()` – Diagnose für Tests (u. a. `running`, `frames`, `builds`, `fps`, `size`).
 - Solange `update()` nie aufgerufen wurde, richtet es sich nach den
   `wx-*`/`is-night`-Klassen am `body`.
 
