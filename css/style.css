@@ -784,8 +784,9 @@ button { cursor: pointer; }
 
 .radar-controls {
   display: flex;
+  flex-wrap: wrap;   /* erlaubt eine eigene Zeile für die Uhrzeit */
   align-items: center;
-  gap: 10px;
+  gap: 4px 10px;     /* 4px zwischen den Zeilen, 10px nebeneinander */
   margin-top: 8px;
 }
 
@@ -809,10 +810,16 @@ button { cursor: pointer; }
   background: transparent;
 }
 
+/* Die Uhrzeit steht in einer EIGENEN Zeile über Play-Knopf und Regler.
+   Grund: Der Text ist je Bild unterschiedlich lang („vor 3 Min.“ vs.
+   „Prognose · in 27 Min.“). Stünde er daneben, würde der Regler bei jedem
+   Bild breiter oder schmaler und unter dem Finger „wegrutschen“. */
 .radar-time {
-  flex: none;
-  min-width: 5.5em;
-  text-align: right;
+  order: -1;          /* optisch vor (= über) Knopf und Regler */
+  flex: 1 0 100%;     /* volle Breite → eigene Zeile */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
   font-size: 14px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;

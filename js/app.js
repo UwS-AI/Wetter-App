@@ -1196,6 +1196,9 @@ window.Wetter = window.Wetter || {};
     li.setAttribute("aria-disabled", "true");
     ul.replaceChildren(li);
     ul.hidden = false;
+    // Die Liste ist sichtbar → für Screenreader als „aufgeklappt“ melden
+    const input = $("search-input");
+    if (input) input.setAttribute("aria-expanded", "true");
   }
 
   /**
