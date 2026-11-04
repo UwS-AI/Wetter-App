@@ -23,7 +23,7 @@ an die hier beschriebenen Namen, damit die Teile zusammenpassen.
   - Ortssuche: `https://geocoding-api.open-meteo.com/v1/search`
   - Ortsname zu GPS-Koordinaten: `https://api.bigdatacloud.net/data/reverse-geocode-client` (ohne Key, optional – bei Fehler „Mein Standort“)
   - Radar: RainViewer `https://api.rainviewer.com/public/weather-maps.json`
-  - Karte: Leaflet 1.9.4 von `https://unpkg.com/leaflet@1.9.4/dist/` + Kacheln von OpenStreetMap/CARTO.
+  - Karte: Leaflet 1.9.4 von `https://unpkg.com/leaflet@1.9.4/dist/` + Kacheln von OpenStreetMap (`tile.openstreetmap.org`, ohne API-Key).
 
 ## Dateien und Ladereihenfolge
 
