@@ -69,14 +69,31 @@ anzeigen. Die restliche App muss trotzdem funktionieren.
 }
 ```
 
-Hinweis zu Zeiten: Open-Meteo mit `timezone=auto` und `timeformat=unixtime`
-abrufen. Dann sind alle Zeiten Unix-Sekunden → `new Date(sek * 1000)`; die
-Anzeige im lokalen Format des Geräts ist für einen Ort in derselben Zeitzone
-korrekt. Für Orte in anderen Zeitzonen `utc_offset_seconds` mitliefern:
-`Wetter.api` hängt `utcOffsetSeconds` an das Ergebnis an, und
-`Wetter.api.formatTime(date, utcOffsetSeconds, opts)` formatiert eine Zeit in
-der Ortszeit des Wetterorts (über `timeZone: "UTC"` und Verschiebung um den
-Offset).
+### Zeiten und Zeitzonen
+
+Open-Meteo mit `timezone=auto` und `timeformat=unixtime` abrufen. Dann sind alle
+Zeiten Unix-Sekunden → `new Date(sek * 1000)` (ein eindeutiger Zeitpunkt).
+Für die **Anzeige** zählt die Ortszeit des Wetterorts, nicht die des Geräts:
+
+- `timezone` (z. B. `"Europe/Berlin"`) ist der **Zeitzonen-Name** des Orts. Er
+  ist die bevorzugte Angabe: Der Browser kennt damit die Regeln für Sommer- und
+  Winterzeit und rechnet für jeden Zeitpunkt den richtigen Abstand zu UTC.
+- `utcOffsetSeconds` (aus `utc_offset_seconds`) ist ein **fester** Abstand zu
+  UTC, der nur für „jetzt“ gilt. Er ist nur noch der Rückfall, falls der
+  Browser den Namen nicht kennt. (Mit dem festen Offset wären z. B. in der
+  Woche vor der Umstellung auf Sommerzeit Wochentage doppelt („So, So“) und
+  Stunden-Labels nach der Umstellung um 1 Std. verschoben.)
+- `Wetter.api.formatTime(date, zone, opts, fallbackOffset)` formatiert eine Zeit:
+  - `zone` als Text (Zeitzonen-Name) → `Intl.DateTimeFormat("de-DE", { ...opts, timeZone: zone })`.
+    Ist der Name ungültig (RangeError), wird `fallbackOffset` benutzt, sonst die Gerätezeit.
+  - `zone` als Zahl → fester Offset in Sekunden (Verschiebung + `timeZone: "UTC"`, wie früher).
+  - `zone` fehlt → Gerätezeit.
+- `app.js` übergibt überall `data.timezone` mit `data.utcOffsetSeconds` als
+  Rückfall – an `formatTime`, `Wetter.nowcast.analyze` und `Wetter.radar`.
+  Wochentage, „Heute“, Stunden- und Nowcast-Labels entstehen ausschließlich über
+  diese Formatierung; `app.js` rechnet nirgends selbst mit dem Offset.
+  Dauern (Tageslänge, „Untergang in …“) sind Differenzen echter Zeitpunkte und
+  brauchen keine Zeitzone.
 
 ## Modul-Schnittstellen
 
@@ -86,10 +103,11 @@ Offset).
 - `windDirText(deg)` → `"SW"` (16er-Rose: N, NNO, NO, ONO, O, OSO, SO, SSO, S, SSW, SW, WSW, W, WNW, NW, NNW)
 
 ### `Wetter.api`
-- `async fetchForecast(lat, lon)` → Datenmodell oben (+ `utcOffsetSeconds`)
+- `async fetchForecast(lat, lon)` → Datenmodell oben (+ `utcOffsetSeconds`, Rückfall zu `timezone`)
 - `async searchPlaces(query)` → `[{ id, name, admin1, country, lat, lon }]` (max. 8, `language=de`)
 - `async reverseGeocode(lat, lon)` → `"Hamburg"` oder `null` bei Fehler
-- `formatTime(date, utcOffsetSeconds, opts)` → String (siehe oben)
+- `formatTime(date, zone, opts, fallbackOffset)` → String; `zone` = Zeitzonen-Name
+  (bevorzugt), Offset in Sekunden oder `undefined` (Gerätezeit), siehe „Zeiten und Zeitzonen“
 - Fehler: wirft `Error` mit deutscher, verständlicher Meldung.
 - Timeout pro Anfrage 10 s (`AbortController`).
 
@@ -102,7 +120,8 @@ Offset).
 - localStorage-Zugriffe immer in try/catch (Safari Privatmodus).
 
 ### `Wetter.nowcast`
-- `analyze(minutely, now = new Date())` →
+- `analyze(minutely, now = new Date(), zone, fallbackOffset)` →
+  (`zone`/`fallbackOffset` wie bei `formatTime` – für die Uhrzeiten im Satz)
   ```js
   { state: "dry" | "starting" | "raining" | "stopping",
     text: "Regen in ca. 30 Min. (ab 14:45)",   // fertiger deutscher Satz
@@ -118,10 +137,17 @@ Offset).
 ### `Wetter.radar`
 - `init(containerId)` – baut Karte in `#radar-map` und verdrahtet die
   Bedienelemente `#radar-play`, `#radar-slider`, `#radar-time`, `#radar-status`.
-- `setLocation(lat, lon, name)` – zentriert Karte (Zoom 8), setzt Marker.
+- `setLocation(lat, lon, name, timeZone, utcOffsetSeconds)` – zentriert Karte
+  (Zoom 8), setzt Marker; `timeZone` (Name, z. B. `"Europe/Berlin"`) und
+  `utcOffsetSeconds` (Rückfall) bestimmen die Ortszeit der Radar-Uhrzeiten
+  (fehlen beide → Gerätezeit; eine Zahl als 4. Wert gilt als Offset).
+- `setTimeZone(timeZone, utcOffsetSeconds)` – nur die Zeitzone der Uhrzeiten
+  ändern, Karte bleibt stehen. `app.js` ruft nach **jedem** erfolgreichen Laden
+  `setLocation` (neuer Ort) bzw. `setTimeZone` (gleicher Ort) auf.
 - Lädt RainViewer-Frames (`radar.past` + `radar.nowcast`), zeigt Uhrzeit je
   Frame, markiert Vorhersage-Frames als „Prognose“. Aktualisiert die Frameliste
-  alle 10 Minuten.
+  alle 10 Minuten (nur bei sichtbarer Seite) und sofort beim Sichtbarwerden der
+  Seite, wenn der letzte erfolgreiche Abruf älter als 5 Minuten ist.
 - `invalidateSize()` – nach Layoutwechsel (Drehen des Geräts) aufrufen.
 
 ## DOM-IDs in `index.html`

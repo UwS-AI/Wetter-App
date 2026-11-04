@@ -1047,7 +1047,7 @@ window.Wetter = window.Wetter || {};
       renderPlaceHeader();
     } else {
       collapseSidebarOnPhone();
-      loadPlace(place);
+      selectPlace(place);
     }
   }
 
@@ -1075,6 +1075,7 @@ window.Wetter = window.Wetter || {};
     ul.hidden = true;
     clear(ul);
     state.searchResults = [];
+    state.searchQuery = "";
     const input = $("search-input");
     if (input) input.setAttribute("aria-expanded", "false");
   }
@@ -1087,6 +1088,17 @@ window.Wetter = window.Wetter || {};
     ul.hidden = false;
   }
 
+  /**
+   * Alte Treffer verwerfen. Danach kann Enter keinen Treffer übernehmen,
+   * der zu einem früheren Suchbegriff gehört.
+   */
+  function forgetResults() {
+    state.searchResults = [];
+    state.searchQuery = "";
+    const input = $("search-input");
+    if (input) input.setAttribute("aria-expanded", "false");
+  }
+
   /** Eingabe im Suchfeld: erst 300 ms Ruhe abwarten („Debounce“), dann suchen */
   function onSearchInput() {
     clearTimeout(state.searchTimer);
@@ -1096,11 +1108,20 @@ window.Wetter = window.Wetter || {};
       closeResults();
       return;
     }
+    // Neuer Suchbegriff → die alten Treffer passen nicht mehr. Wir zeigen
+    // gleich „Suche …“, damit niemand versehentlich einen alten Treffer
+    // antippt (oder per Enter übernimmt). Kommt nur z. B. ein Leerzeichen
+    // am Ende dazu, bleibt der Begriff gleich und die Treffer bleiben stehen.
+    if (query === state.searchQuery) return;   // Treffer passen noch
+    state.searchSeq++;           // eine evtl. noch laufende Suche ist veraltet
+    forgetResults();
+    showSearchInfo("Suche …");
     state.searchTimer = setTimeout(() => runSearch(query), SEARCH_DEBOUNCE_MS);
   }
 
   async function runSearch(query) {
     const seq = ++state.searchSeq;
+    forgetResults();             // bis die neuen Treffer da sind, gilt keiner
     showSearchInfo("Suche …");
     try {
       if (!W.api || typeof W.api.searchPlaces !== "function") {
@@ -1108,17 +1129,24 @@ window.Wetter = window.Wetter || {};
       }
       const results = await W.api.searchPlaces(query);
       if (seq !== state.searchSeq) return;   // inzwischen wurde weitergetippt
-      renderSearchResults(Array.isArray(results) ? results : []);
+      renderSearchResults(Array.isArray(results) ? results : [], query);
     } catch (err) {
       if (seq !== state.searchSeq) return;
+      forgetResults();
       showSearchInfo("Suche fehlgeschlagen: " + ((err && err.message) || "Unbekannter Fehler"));
     }
   }
 
-  function renderSearchResults(results) {
+  /**
+   * Trefferliste anzeigen.
+   * @param {Array} results  gefundene Orte
+   * @param {string} query   Suchbegriff, zu dem die Treffer gehören
+   */
+  function renderSearchResults(results, query) {
     const ul = $("search-results");
     if (!ul) return;
     state.searchResults = results;
+    state.searchQuery = query;
     if (!results.length) {
       showSearchInfo("Keine Orte gefunden.");
       return;
@@ -1147,9 +1175,11 @@ window.Wetter = window.Wetter || {};
     const input = $("search-input");
     input.value = "";
     input.blur();               // Tastatur auf dem iPhone schließen
+    clearTimeout(state.searchTimer);
+    state.searchSeq++;          // evtl. noch laufende Suche verwerfen
     closeResults();
     collapseSidebarOnPhone();
-    loadPlace(place);
+    selectPlace(place);
   }
 
   function onResultsClick(event) {
@@ -1158,11 +1188,15 @@ window.Wetter = window.Wetter || {};
     choosePlace(state.searchResults[Number(btn.dataset.index)]);
   }
 
-  /** Enter im Suchfeld: ersten Treffer nehmen bzw. sofort suchen */
+  /**
+   * Enter im Suchfeld: ersten Treffer nehmen bzw. sofort suchen.
+   * Übernommen wird nur ein Treffer, der zum JETZT eingegebenen Begriff gehört –
+   * nie ein alter Treffer von vorhin.
+   */
   function onSearchSubmit(event) {
     event.preventDefault();      // Seite nicht neu laden!
     const query = $("search-input").value.trim();
-    if (state.searchResults.length) {
+    if (state.searchResults.length && state.searchQuery === query) {
       choosePlace(state.searchResults[0]);
     } else if (query.length >= 2) {
       clearTimeout(state.searchTimer);
@@ -1230,6 +1264,30 @@ window.Wetter = window.Wetter || {};
     return "Genauigkeit ± " + Math.round(meters) + " m";
   }
 
+  const LOCATE_LABEL = "📍 Mein Standort";
+
+  /** Standort-Knopf wieder in den Normalzustand bringen. */
+  function resetLocateButton() {
+    const btn = $("locate-btn");
+    if (!btn) return;
+    btn.disabled = false;
+    btn.textContent = LOCATE_LABEL;
+  }
+
+  /**
+   * Eine laufende Ortung „abbestellen“, weil der Nutzer inzwischen selbst
+   * einen Ort gewählt hat. Die Ortung selbst lässt sich nicht stoppen – aber
+   * durch den neuen Zähler-Stand erkennt ihr Callback später, dass er veraltet
+   * ist, und lädt den GPS-Ort dann NICHT mehr.
+   */
+  function cancelLocate() {
+    state.locateSeq++;
+    if (state.locateActive) {
+      state.locateActive = 0;
+      resetLocateButton();
+    }
+  }
+
   function onLocate() {
     const btn = $("locate-btn");
 
@@ -1243,19 +1301,32 @@ window.Wetter = window.Wetter || {};
       return;
     }
 
-    // 2. Knopf sperren, solange die Ortung läuft (WLAN/externes GPS kann dauern)
-    const original = "📍 Mein Standort";
+    // 2. Diese Ortung bekommt eine eigene Nummer („Token“). Wählt der Nutzer
+    //    zwischendurch selbst einen Ort, erhöht cancelLocate() den Zähler –
+    //    dann passt die Nummer nicht mehr und das Ergebnis wird verworfen.
+    const token = ++state.locateSeq;
+    state.locateActive = token;
+    const isCurrent = () => token === state.locateSeq;
+
+    // 3. Knopf sperren, solange die Ortung läuft (WLAN/externes GPS kann dauern)
     btn.disabled = true;
     btn.textContent = "📍 Orte …";
     showLoading("Bestimme Standort …");
 
+    // Knopf zurücksetzen – aber nur, wenn nicht schon eine NEUERE Ortung läuft
     const done = () => {
-      btn.disabled = false;
-      btn.textContent = original;
+      if (state.locateActive === token) {
+        state.locateActive = 0;
+        resetLocateButton();
+      }
     };
 
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
+        if (!isCurrent()) {        // inzwischen anderer Ort gewählt → nichts tun
+          done();
+          return;
+        }
         const lat = Math.round(pos.coords.latitude * 10000) / 10000;   // 4 Nachkommastellen reichen (~10 m)
         const lon = Math.round(pos.coords.longitude * 10000) / 10000;
         const accuracy = pos.coords.accuracy;                           // Radius in Metern
@@ -1268,13 +1339,17 @@ window.Wetter = window.Wetter || {};
           console.warn("reverseGeocode fehlgeschlagen:", err);
         }
         done();
+        // Während wir auf den Ortsnamen gewartet haben, kann der Nutzer einen
+        // anderen Ort gewählt haben. Dann darf GPS ihn NICHT überschreiben.
+        if (!isCurrent()) return;
         collapseSidebarOnPhone();
         // accuracy ist eine Zusatzangabe nur für die Anzeige in #loc-sub
         loadPlace({ id: "gps", name: name || "Mein Standort", admin1: "", country: "", lat, lon, accuracy });
       },
       (err) => {
         done();
-        showError(geoErrorText(err), onLocate);
+        // Fehlermeldung nur, wenn diese Ortung noch gefragt ist
+        if (isCurrent()) showError(geoErrorText(err), onLocate);
       },
       {
         enableHighAccuracy: true,   // externes GPS bzw. beste WLAN-Ortung nutzen
