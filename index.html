@@ -1,17 +1,172 @@
 <!DOCTYPE html>
+<!--
+  index.html – das „Gerüst“ der Wetter-App
+  =========================================
+  Hier steht nur die STRUKTUR der Seite (welche Bereiche es gibt).
+  - Wie es aussieht, regelt css/style.css.
+  - Was passiert (Daten laden, Inhalte einfüllen), regeln die Dateien in js/.
+  Die IDs (id="...") sind im Vertrag docs/ARCHITEKTUR.md festgelegt –
+  bitte nicht umbenennen, sonst finden die Skripte ihre Elemente nicht mehr.
+-->
 <html lang="de">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Meine Wetter-App</title>
-  <link rel="stylesheet" href="style.css">
+
+  <!-- viewport-fit=cover: Die Seite darf bis in die Ränder (Notch, abgerundete
+       Ecken) reichen. Die Abstände dafür kommen im CSS aus env(safe-area-inset-*). -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+
+  <title>Wetter</title>
+  <meta name="description" content="Wetter mit Regenradar und Kurzfrist-Vorhersage">
+
+  <!-- Farbe der Browser-Leiste (Safari). app.js passt sie ans Wetter an. -->
+  <meta name="theme-color" content="#0f4c5c">
+
+  <!-- „Zum Home-Bildschirm“ auf iPhone/iPad: Vollbild ohne Safari-Leisten,
+       Statusleiste durchsichtig über unserem Farbverlauf. -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Wetter">
+  <!-- Telefonnummern-Erkennung aus (sonst macht Safari evtl. Zahlen zu Links) -->
+  <meta name="format-detection" content="telephone=no">
+
+  <!-- Leaflet (Kartenbibliothek) – Stylesheet. Fehlt es (offline),
+       funktioniert die App trotzdem, nur ohne Karte. -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+
+  <!-- Unser eigenes Aussehen -->
+  <link rel="stylesheet" href="css/style.css">
 </head>
-<body>
-  <h1>Meine Wetter-App</h1>
 
-  <!-- Hier kommt später die Anzeige hin -->
-  <div id="wetter"></div>
+<!-- Die Klassen am body (wx-<gruppe>, is-night) setzt app.js je nach Wetter.
+     Startwert: „partly“ am Tag, damit vor dem Laden schon ein Verlauf zu sehen ist. -->
+<body class="wx-partly">
+  <canvas id="wx-effects" aria-hidden="true"></canvas>
+  <!-- ↑ Dezente Wetteranimation (Regen, Schnee, Wolken …) hinter allen Inhalten.
+       Wird von js/effects.js gezeichnet; aria-hidden: reine Dekoration. -->
 
-  <script src="app.js"></script>
+  <div id="app">
+
+    <!-- ===================== Linke Spalte: Suche & Favoriten ===================== -->
+    <aside id="sidebar" aria-label="Ortssuche und Favoriten">
+
+      <!-- Nur auf dem iPhone sichtbar: klappt den Bereich auf/zu -->
+      <button id="sidebar-toggle" class="sidebar-toggle" type="button"
+              aria-expanded="false" aria-controls="sidebar-body">
+        <span aria-hidden="true">🔍</span>
+        <span class="sidebar-toggle-text">Suche &amp; Favoriten</span>
+        <span class="sidebar-toggle-chevron" aria-hidden="true">▾</span>
+      </button>
+
+      <div id="sidebar-body" class="sidebar-body">
+        <!-- Suchformular: role="search" hilft Screenreadern -->
+        <form id="search-form" role="search" autocomplete="off">
+          <label class="visually-hidden" for="search-input">Ort suchen</label>
+          <!-- role="combobox": Suchfeld mit aufklappender Trefferliste.
+               aria-expanded / aria-activedescendant setzt app.js. -->
+          <input id="search-input" type="search" placeholder="Stadt oder Ort suchen"
+                 enterkeyhint="search" autocapitalize="words" spellcheck="false"
+                 role="combobox" aria-expanded="false"
+                 aria-controls="search-results" aria-autocomplete="list">
+          <!-- Trefferliste, wird von app.js gefüllt (Treffer = li role="option") -->
+          <ul id="search-results" class="search-results" role="listbox"
+              aria-label="Suchergebnisse" hidden></ul>
+        </form>
+
+        <button id="locate-btn" class="pill-btn" type="button">📍 Mein Standort</button>
+
+        <h3 class="sidebar-heading">Favoriten</h3>
+        <ul id="favorites-list" class="favorites-list"></ul>
+      </div>
+    </aside>
+
+    <!-- ===================== Mitte: aktuelles Wetter ===================== -->
+    <main id="main">
+
+      <section id="current" aria-labelledby="loc-name">
+        <div class="current-head">
+          <div class="loc-line">
+            <h2 id="loc-name">–</h2>
+            <button id="fav-toggle" class="fav-toggle" type="button"
+                    aria-pressed="false" aria-label="Als Favorit speichern">☆</button>
+          </div>
+          <p id="loc-sub" class="loc-sub"></p>
+
+          <div class="current-main">
+            <div id="current-icon" class="current-icon" aria-hidden="true"></div>
+            <div id="current-temp" class="current-temp">–</div>
+          </div>
+          <p id="current-desc" class="current-desc"></p>
+          <p id="current-hilo" class="current-hilo"></p>
+          <p id="current-updated" class="current-updated"></p>
+        </div>
+
+        <!-- Detailkacheln (Gefühlt, Wind, …) – app.js baut sie hier ein -->
+        <div id="current-details" class="details-grid"></div>
+      </section>
+
+      <section id="nowcast" class="card" aria-labelledby="nowcast-title">
+        <h3 id="nowcast-title" class="card-title">☔ Niederschlag · nächste 3 Std.</h3>
+        <p id="nowcast-text" class="nowcast-text">–</p>
+        <!-- 12 Balken à 15 Minuten -->
+        <div id="nowcast-bars" class="nowcast-bars" aria-hidden="true"></div>
+      </section>
+
+      <section id="hourly" class="card" aria-labelledby="hourly-title">
+        <h3 id="hourly-title" class="card-title">🕐 Stündliche Vorhersage</h3>
+        <!-- Temperaturkurve (SVG, von app.js gezeichnet) -->
+        <div id="hourly-chart" class="hourly-chart" aria-hidden="true"></div>
+        <!-- Stundenleiste – seitlich wischbar. role="list": Screenreader
+             erfahren, dass es eine Liste von Stunden ist (Einträge: role="listitem").
+             tabindex="0": per Tastatur erreichbar und mit Pfeiltasten scrollbar. -->
+        <div id="hourly-strip" class="hourly-strip" tabindex="0" role="list"
+             aria-label="Stündliche Vorhersage, seitlich scrollbar"></div>
+      </section>
+    </main>
+
+    <!-- ===================== Rechte Spalte: 7 Tage + Radar ===================== -->
+    <section id="side" aria-label="Vorhersage und Radar">
+
+      <section id="daily" class="card" aria-labelledby="daily-title">
+        <h3 id="daily-title" class="card-title">📅 7-Tage-Vorhersage</h3>
+        <ul id="daily-list" class="daily-list"></ul>
+      </section>
+
+      <section id="radar" class="card" aria-labelledby="radar-title">
+        <h3 id="radar-title" class="card-title">🗺️ Regenradar</h3>
+        <div id="radar-map" class="radar-map"></div>
+        <div class="radar-controls">
+          <button id="radar-play" class="radar-play" type="button"
+                  aria-label="Radar-Animation abspielen">▶</button>
+          <input id="radar-slider" class="radar-slider" type="range"
+                 min="0" max="0" value="0" step="1" aria-label="Radar-Zeitpunkt">
+          <span id="radar-time" class="radar-time">–</span>
+        </div>
+        <p id="radar-status" class="radar-status"></p>
+      </section>
+    </section>
+
+    <!-- Lade- und Fehlermeldungen (Screenreader lesen Änderungen vor) -->
+    <div id="status" class="status" role="status" aria-live="polite" hidden></div>
+  </div>
+
+  <p id="footer" class="footer">
+    Wetterdaten: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> ·
+    Radar: <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a> ·
+    Karte: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>-Mitwirkende,
+    © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>
+  </p>
+
+  <!-- Skripte in fester Reihenfolge (siehe docs/ARCHITEKTUR.md):
+       zuerst Leaflet, dann unsere Module, ganz zuletzt app.js („Klebstoff“). -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="js/codes.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/favorites.js"></script>
+  <script src="js/nowcast.js"></script>
+  <script src="js/radar.js"></script>
+  <script src="js/effects.js"></script>
+  <script src="js/app.js"></script>
 </body>
 </html>
