@@ -9,7 +9,10 @@
  *   „Es regnet – voraussichtlich bis ca. 15:30“
  *
  * Schnittstelle (siehe docs/ARCHITEKTUR.md):
- *   Wetter.nowcast.analyze(minutely, now = new Date(), utcOffsetSeconds)
+ *   Wetter.nowcast.analyze(minutely, now = new Date(), zone, fallbackOffset)
+ *     zone = Zeitzonen-Name des Wetterorts ("Europe/Berlin", empfohlen) oder
+ *            – wie früher – Offset in Sekunden; fallbackOffset = Offset in
+ *            Sekunden für den Fall, dass der Browser den Namen nicht kennt.
  *     → { state, text, minutesUntilChange, maxIntensity, available, changeTime }
  *   Wetter.nowcast.intensityLabel(mmPer15) → "leicht" | "mäßig" | "stark"
  *
@@ -96,16 +99,27 @@ window.Wetter = window.Wetter || {};
   /**
    * Formatiert eine Uhrzeit als „14:45“.
    * Bevorzugt Wetter.api.formatTime (zeigt die Ortszeit des Wetterorts),
-   * sonst die Gerätezeit über toLocaleTimeString.
+   * sonst toLocaleTimeString (mit Zeitzonen-Name, falls bekannt, sonst Gerätezeit).
+   *
+   * @param {Date} date
+   * @param {string|number} [zone]        Zeitzonen-Name ("Europe/Berlin") oder Offset in Sekunden
+   * @param {number} [fallbackOffset]     Offset in Sekunden, falls der Name ungültig ist
    */
-  function formatClock(date, utcOffsetSeconds) {
+  function formatClock(date, zone, fallbackOffset) {
     const opts = { hour: "2-digit", minute: "2-digit" };
     const api = window.Wetter && window.Wetter.api;
     if (api && typeof api.formatTime === "function") {
       try {
-        return api.formatTime(date, utcOffsetSeconds, opts);
+        return api.formatTime(date, zone, opts, fallbackOffset);
       } catch (e) {
         // Falls formatTime scheitert, einfach unten weitermachen.
+      }
+    }
+    if (typeof zone === "string" && zone) {
+      try {
+        return date.toLocaleTimeString("de-DE", Object.assign({}, opts, { timeZone: zone }));
+      } catch (e) {
+        // Unbekannte Zeitzone → Gerätezeit (unten).
       }
     }
     return date.toLocaleTimeString("de-DE", opts);
@@ -163,7 +177,10 @@ window.Wetter = window.Wetter || {};
    *
    * @param {Array<{time: Date, precip: number|null}>} minutely  Daten aus Wetter.api
    * @param {Date}   [now=new Date()]        „Jetzt“ (für Tests änderbar)
-   * @param {number} [utcOffsetSeconds]      Zeitzonen-Versatz des Wetterorts
+   * @param {string|number} [zone]           Zeitzone des Wetterorts für die Uhrzeiten im
+   *                                         Satz: Name wie "Europe/Berlin" (kennt die
+   *                                         Zeitumstellung) oder Offset in Sekunden
+   * @param {number} [fallbackOffset]        Offset in Sekunden, falls der Name ungültig ist
    * @returns {{state: string, text: string, minutesUntilChange: number|null,
    *            maxIntensity: number, available: boolean, changeTime: Date|null}}
    *
@@ -173,7 +190,7 @@ window.Wetter = window.Wetter || {};
    *   "raining"  – es regnet und hört im Zeitraum nicht auf
    *   "stopping" – es regnet, hört aber im Zeitraum auf
    */
-  function analyze(minutely, now, utcOffsetSeconds) {
+  function analyze(minutely, now, zone, fallbackOffset) {
     const nowDate = toDate(now) || new Date();
     const nowMs = nowDate.getTime();
 
@@ -237,7 +254,7 @@ window.Wetter = window.Wetter || {};
       // Beginn des nassen Abschnitts (frühestens „jetzt“).
       const startMs = Math.max(firstWet.start, nowMs);
       const minutes = roundTo5((startMs - nowMs) / 60000);
-      const clock = formatClock(new Date(startMs), utcOffsetSeconds);
+      const clock = formatClock(new Date(startMs), zone, fallbackOffset);
       const text =
         minutes < 10
           ? "Regen in wenigen Minuten (ab " + clock + ")"
@@ -258,7 +275,7 @@ window.Wetter = window.Wetter || {};
     }
     const stopMs = firstDry.start;
     const minutes = roundTo5((stopMs - nowMs) / 60000);
-    const clock = formatClock(new Date(stopMs), utcOffsetSeconds);
+    const clock = formatClock(new Date(stopMs), zone, fallbackOffset);
     const text =
       minutes < 10
         ? "Es regnet – hört in wenigen Minuten auf (ca. " + clock + ")"

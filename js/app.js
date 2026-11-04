@@ -56,13 +56,20 @@ window.Wetter = window.Wetter || {};
   /* ================================================================== */
 
   const state = {
-    place: null,          // aktueller Ort { id, name, admin1, country, lat, lon }
+    // ANGEZEIGTER Ort { id, name, admin1, country, lat, lon }. Er passt immer
+    // zu state.data: Ein neuer Ort wird erst übernommen, wenn seine Daten da sind.
+    place: null,
+    pendingPlace: null,   // Ort, der gerade geladen wird (bzw. zuletzt gewünscht war)
     data: null,           // zuletzt geladene Wetterdaten (Datenmodell aus api.js)
     loadSeq: 0,           // Zähler, um veraltete Antworten zu erkennen
+    loading: false,       // läuft gerade ein Ladevorgang?
     lastLoadedAt: 0,      // Zeitpunkt (ms) der letzten erfolgreichen Ladung
     searchSeq: 0,         // dasselbe für die Ortssuche
     searchTimer: null,    // Timer für das „Debounce“ der Suche
-    searchResults: [],    // letzte Treffer der Suche
+    searchResults: [],    // letzte Treffer der Suche …
+    searchQuery: "",      // … und der Suchbegriff, zu dem sie gehören
+    locateSeq: 0,         // Zähler für die GPS-Ortung (jede andere Ortswahl erhöht ihn)
+    locateActive: 0,      // Nummer der Ortung, die gerade läuft (0 = keine)
     radarReady: false,    // wurde Wetter.radar.init erfolgreich aufgerufen?
   };
 
@@ -174,22 +181,45 @@ window.Wetter = window.Wetter || {};
   }
 
   /**
+   * Zeitzone des angezeigten Wetterorts.
+   *   zone   = Zeitzonen-Name wie "Europe/Berlin" (falls bekannt), sonst der Offset
+   *   offset = fester Abstand zu UTC in Sekunden (Rückfall, kann undefined sein)
+   * Der NAME ist wichtig: Nur damit stimmen Uhrzeiten und Wochentage auch über
+   * eine Zeitumstellung (Sommer-/Winterzeit) hinweg. Der Offset gilt nur für „jetzt“.
+   */
+  function placeZone() {
+    const data = state.data || {};
+    const offset = isNum(data.utcOffsetSeconds) ? data.utcOffsetSeconds : undefined;
+    const name = typeof data.timezone === "string" && data.timezone ? data.timezone : undefined;
+    return { zone: name !== undefined ? name : offset, name, offset };
+  }
+
+  /**
    * Zeit in der ORTSZEIT des Wetterorts formatieren (z. B. „14:30“).
-   * Nutzt Wetter.api.formatTime; falls das fehlt, rechnen wir selbst:
-   * Zeit um den UTC-Versatz des Orts verschieben und als „UTC“ anzeigen.
+   * Nutzt Wetter.api.formatTime; falls das fehlt, rechnen wir selbst
+   * (erst mit dem Zeitzonen-Namen, sonst mit dem festen Offset).
    */
   function fmtTime(date, opts) {
     const d = toDate(date);
     if (!d) return DASH;
-    const offset = state.data && isNum(state.data.utcOffsetSeconds) ? state.data.utcOffsetSeconds : undefined;
+    const { zone, name, offset } = placeZone();
     try {
       if (W.api && typeof W.api.formatTime === "function") {
-        const s = W.api.formatTime(d, offset, opts);
+        const s = W.api.formatTime(d, zone, opts, offset);
         if (s) return s;
       }
     } catch (err) {
       console.warn("api.formatTime fehlgeschlagen:", err);
     }
+    // Ersatz, falls api.js fehlt: zuerst mit Zeitzonen-Namen …
+    if (name !== undefined) {
+      try {
+        return d.toLocaleString("de-DE", Object.assign({}, opts, { timeZone: name }));
+      } catch (err) {
+        /* unbekannte Zeitzone → weiter mit Offset */
+      }
+    }
+    // … sonst Zeit um den Offset verschieben und als „UTC“ anzeigen.
     try {
       if (offset === undefined) return d.toLocaleString("de-DE", opts);
       const shifted = new Date(d.getTime() + offset * 1000);
@@ -305,32 +335,28 @@ window.Wetter = window.Wetter || {};
   /* ================================================================== */
 
   /**
-   * Einen Ort anzeigen: Kopfzeile sofort aktualisieren, dann Daten laden.
+   * Einen Ort laden und – sobald seine Daten da sind – anzeigen.
+   *
+   * Wichtig: Der neue Ort wird erst übernommen, wenn das Laden GEKLAPPT hat.
+   * Bis dahin bleiben Kopfzeile, Stern, Radar und alle Daten beim alten Ort
+   * (die Statuszeile zeigt „Lade Wetter für …“). Schlägt das Laden fehl, passt
+   * alles weiterhin zusammen – und „Erneut versuchen“ lädt den gewünschten Ort.
+   *
    * @param {object} place  Ort { id, name, admin1, country, lat, lon }
    * @param {object} [opts] { silent: true } = Hintergrund-Aktualisierung ohne Ladeanzeige
    */
   async function loadPlace(place, opts = {}) {
     if (!place || !isNum(place.lat) || !isNum(place.lon)) return;
 
-    const isNewPlace = !state.place || state.place.lat !== place.lat || state.place.lon !== place.lon;
-    state.place = place;
-
-    // Merken, damit beim nächsten Start dieser Ort kommt
-    try {
-      if (W.favorites && W.favorites.setLast) W.favorites.setLast(place);
-    } catch (err) {
-      console.warn("favorites.setLast fehlgeschlagen:", err);
-    }
-
-    renderPlaceHeader();
-    renderFavorites();
-
-    // Radar auf den neuen Ort setzen (unabhängig von den Wetterdaten)
-    if (isNewPlace) radarCall("setLocation", place.lat, place.lon, place.name);
-
     // Die Nummer dieses Ladevorgangs merken. Kommt eine ältere Antwort erst
     // NACH einer neueren an (z. B. schnell zweimal Ort gewechselt), ignorieren wir sie.
     const seq = ++state.loadSeq;
+    state.loading = true;
+    state.pendingPlace = place;
+
+    // Beim allerersten Laden gibt es noch keinen alten Ort – dann zeigt die
+    // Kopfzeile schon den gewünschten Ort (siehe renderPlaceHeader).
+    if (!state.place) renderPlaceHeader();
 
     if (!opts.silent) {
       showLoading("Lade Wetter für " + (place.name || "Ort") + " …");
@@ -345,27 +371,63 @@ window.Wetter = window.Wetter || {};
       if (seq !== state.loadSeq) return;          // veraltet → verwerfen
       if (!data || typeof data !== "object") throw new Error("Keine Wetterdaten erhalten.");
 
+      // Erfolg: JETZT erst den neuen Ort übernehmen – zusammen mit seinen Daten.
+      const isNewPlace = !state.place || state.place.lat !== place.lat || state.place.lon !== place.lon;
+      state.place = place;
       state.data = data;
       state.lastLoadedAt = Date.now();
-      renderAll();
+
+      // Merken, damit beim nächsten Start dieser Ort kommt
+      try {
+        if (W.favorites && W.favorites.setLast) W.favorites.setLast(place);
+      } catch (err) {
+        console.warn("favorites.setLast fehlgeschlagen:", err);
+      }
+
+      renderAll();          // enthält auch die Kopfzeile mit Stern
+      renderFavorites();    // markiert den aktuellen Ort in der Favoritenliste
       hideStatus();
 
-      // Neuer Ort: Radar noch einmal setzen, jetzt mit Zeitzonen-Versatz,
-      // damit die Radar-Uhrzeiten in Ortszeit erscheinen.
-      if (isNewPlace) radarCall("setLocation", place.lat, place.lon, place.name, data.utcOffsetSeconds);
+      // Radar: Bei neuem Ort Karte zentrieren + Marker setzen, sonst nur die
+      // Zeitzone auffrischen (die Karte springt dann nicht zurück, falls der
+      // Nutzer sie verschoben hat). Beides mit Zeitzonen-Name + Offset als
+      // Rückfall, damit die Radar-Uhrzeiten in Ortszeit erscheinen.
+      const { zone, offset } = placeZone();
+      if (isNewPlace) radarCall("setLocation", place.lat, place.lon, place.name, zone, offset);
+      else radarCall("setTimeZone", zone, offset);
     } catch (err) {
       if (seq !== state.loadSeq) return;
       console.warn("Laden fehlgeschlagen:", err);
       const msg = (err && err.message) || "Die Wetterdaten konnten nicht geladen werden.";
+      // „Erneut versuchen“ lädt den GEWÜNSCHTEN Ort (nicht den angezeigten).
       showError(msg, () => loadPlace(place));
     } finally {
-      if (seq === state.loadSeq) document.body.classList.remove("is-loading");
+      if (seq === state.loadSeq) {
+        state.loading = false;
+        document.body.classList.remove("is-loading");
+      }
     }
   }
 
-  /** Aktuellen Ort im Hintergrund neu laden (Auto-Aktualisierung). */
+  /**
+   * Aktuellen Ort im Hintergrund neu laden (Auto-Aktualisierung).
+   * Läuft gerade schon ein Ladevorgang (z. B. der Nutzer hat eben einen neuen
+   * Ort gewählt), tun wir nichts – sonst würde die Aktualisierung des ALTEN
+   * Orts den neuen Ladevorgang verdrängen.
+   */
   function refresh() {
+    if (state.loading) return;
     if (state.place) loadPlace(state.place, { silent: true });
+  }
+
+  /**
+   * Der Nutzer wählt selbst einen Ort (Suche, Favorit). Eine evtl. noch
+   * laufende GPS-Ortung ist damit hinfällig und darf den Ort später nicht
+   * mehr überschreiben.
+   */
+  function selectPlace(place) {
+    cancelLocate();
+    loadPlace(place);
   }
 
   /* ================================================================== */
@@ -417,9 +479,15 @@ window.Wetter = window.Wetter || {};
     if (meta && top) meta.setAttribute("content", top);
   }
 
-  /** Ortsname, Region und Favoriten-Stern */
+  /**
+   * Ortsname, Region und Favoriten-Stern.
+   * Gezeigt wird der Ort, dessen Daten auf dem Bildschirm stehen (state.place).
+   * Nur ganz am Anfang, solange noch gar nichts geladen ist, zeigen wir den
+   * Ort, der gerade geladen wird – dann gibt es keine „alten“ Daten, die nicht
+   * dazu passen würden. Der Stern erscheint aber erst, wenn Daten da sind.
+   */
   function renderPlaceHeader() {
-    const place = state.place;
+    const place = state.place || state.pendingPlace;
     setText("loc-name", place && place.name);
     const sub = $("loc-sub");
     if (sub) sub.textContent = placeSub(place);
@@ -427,7 +495,7 @@ window.Wetter = window.Wetter || {};
     const star = $("fav-toggle");
     if (star) {
       // GPS-Orte können kein Favorit sein (siehe Vertrag) → Stern ausblenden
-      const canFav = !!place && place.id !== "gps" && !!W.favorites;
+      const canFav = !!state.place && place.id !== "gps" && !!W.favorites;
       star.hidden = !canFav;
       const isFav = canFav && favHas(place.id);
       star.textContent = isFav ? "★" : "☆";
@@ -586,8 +654,10 @@ window.Wetter = window.Wetter || {};
     let result = null;
     try {
       if (W.nowcast && typeof W.nowcast.analyze === "function" && minutely.length) {
-        // 3. Wert: Zeitzonen-Versatz, damit Uhrzeiten im Satz in Ortszeit stehen
-        result = W.nowcast.analyze(minutely, new Date(), data.utcOffsetSeconds);
+        // 3./4. Wert: Zeitzone des Orts (Name, Rückfall Offset),
+        // damit Uhrzeiten im Satz in Ortszeit stehen
+        const { zone, offset } = placeZone();
+        result = W.nowcast.analyze(minutely, new Date(), zone, offset);
       }
     } catch (err) {
       console.warn("nowcast.analyze fehlgeschlagen:", err);

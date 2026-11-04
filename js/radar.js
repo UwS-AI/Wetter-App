@@ -6,7 +6,12 @@
  *
  * Schnittstelle (siehe docs/ARCHITEKTUR.md):
  *   Wetter.radar.init(containerId)          Karte bauen, Bedienelemente verdrahten
- *   Wetter.radar.setLocation(lat, lon, name) Karte zentrieren (Zoom 8), Marker setzen
+ *   Wetter.radar.setLocation(lat, lon, name, timeZone, utcOffsetSeconds)
+ *                                           Karte zentrieren (Zoom 8), Marker setzen,
+ *                                           Uhrzeiten in Ortszeit anzeigen
+ *   Wetter.radar.setTimeZone(timeZone, utcOffsetSeconds)
+ *                                           nur die Zeitzone der Uhrzeiten ändern
+ *                                           (Karte bleibt, wo sie ist)
  *   Wetter.radar.invalidateSize()           nach Layoutwechsel (z. B. Gerät gedreht)
  *
  * Benutzte DOM-Elemente:
@@ -62,6 +67,10 @@ window.Wetter = window.Wetter || {};
     endPause: 1500, // ms Pause auf dem letzten Bild, dann von vorn
     maxLoadWaits: 5, // so oft (à frameDelay) auf ein ladendes Bild warten
     refreshInterval: 10 * 60 * 1000, // Frameliste alle 10 Minuten neu laden
+    // Wird die Seite wieder sichtbar und ist der letzte erfolgreiche Abruf
+    // älter als das, laden wir die Frameliste sofort neu (sonst sähe man nach
+    // langer Pause veraltete Radarbilder).
+    staleAfter: 5 * 60 * 1000,
     fetchTimeout: 10000, // 10 s, wie bei Wetter.api
   };
 
@@ -81,8 +90,12 @@ window.Wetter = window.Wetter || {};
     timer: null, // setTimeout der Animation
     waits: 0, // wie oft schon auf ein ladendes Bild gewartet wurde
     refreshTimer: null, // setInterval für das Neuladen der Frameliste
+    lastFetchAt: 0, // Zeitpunkt (ms) des letzten ERFOLGREICHEN Abrufs der Frameliste
+    fetching: false, // läuft gerade ein Abruf? (verhindert doppelte Abrufe)
     resumeOnVisible: false, // nach dem Zurückkehren in den Tab weiterspielen?
-    location: null, // { lat, lon, name, utcOffsetSeconds } – auch vor init merken
+    location: null, // { lat, lon, name } – auch vor init merken
+    timeZone: undefined, // Zeitzonen-Name des Orts, z. B. "Europe/Berlin"
+    utcOffsetSeconds: undefined, // Rückfall: fester Abstand zu UTC in Sekunden
     marker: null,
   };
 
@@ -90,15 +103,20 @@ window.Wetter = window.Wetter || {};
   // Hilfsfunktionen für Texte
   // ---------------------------------------------------------------------
 
-  /** Uhrzeit „14:20“ aus Unix-Sekunden (Ortszeit, falls Offset bekannt). */
+  /**
+   * Uhrzeit „14:20“ aus Unix-Sekunden – in der Ortszeit des Wetterorts, falls
+   * Zeitzonen-Name oder Offset bekannt sind, sonst in Gerätezeit.
+   * Der Name ("Europe/Berlin") ist besser als der Offset, weil der Browser damit
+   * auch die Zeitumstellung (Sommer-/Winterzeit) richtig berücksichtigt.
+   */
   function formatClock(seconds) {
     const date = new Date(seconds * 1000);
     const opts = { hour: "2-digit", minute: "2-digit" };
     const api = window.Wetter.api;
-    const offset = state.location && state.location.utcOffsetSeconds;
-    if (typeof offset === "number" && api && typeof api.formatTime === "function") {
+    const zone = state.timeZone !== undefined ? state.timeZone : state.utcOffsetSeconds;
+    if (zone !== undefined && api && typeof api.formatTime === "function") {
       try {
-        return api.formatTime(date, offset, opts);
+        return api.formatTime(date, zone, opts, state.utcOffsetSeconds);
       } catch (e) {
         /* weiter mit Gerätezeit */
       }
@@ -254,6 +272,11 @@ window.Wetter = window.Wetter || {};
       if (state.index >= 0) showFrame(state.index);
       if (state.resumeOnVisible) play();
       state.resumeOnVisible = false;
+      // Während die Seite versteckt war, lief der 10-Minuten-Takt nicht
+      // (siehe init). Ist der letzte Abruf schon länger her, jetzt sofort
+      // neue Bilder holen. loadFrames merkt sich, ob die Animation lief,
+      // und spielt danach weiter.
+      if (Date.now() - state.lastFetchAt > CONFIG.staleAfter) loadFrames();
     }
   }
 
@@ -313,8 +336,9 @@ window.Wetter = window.Wetter || {};
    * Bereits vorhandene Ebenen werden weiterverwendet, veraltete entfernt.
    */
   async function loadFrames() {
-    if (!state.map) return;
+    if (!state.map || state.fetching) return; // kein Doppel-Abruf
     let parsed;
+    state.fetching = true;
     try {
       parsed = parseFrames(await fetchJson(CONFIG.framesUrl));
     } catch (err) {
@@ -326,6 +350,9 @@ window.Wetter = window.Wetter || {};
       );
       if (!state.frames.length) setControlsEnabled(false);
       return;
+    } finally {
+      // „finally“ läuft immer – auch nach dem return oben.
+      state.fetching = false;
     }
     if (!parsed.host || parsed.frames.length === 0) {
       if (!state.frames.length) {
@@ -334,6 +361,9 @@ window.Wetter = window.Wetter || {};
       }
       return;
     }
+
+    // Ab hier haben wir eine brauchbare, frische Liste.
+    state.lastFetchAt = Date.now();
 
     // Merken, was gerade angezeigt wird, um die Position zu behalten.
     const wasAtLastPast = state.index === state.lastPastIndex;
@@ -547,26 +577,57 @@ window.Wetter = window.Wetter || {};
   }
 
   /**
+   * Zeitzone für die Uhrzeiten merken (ohne Karte und Marker anzufassen).
+   * Gibt man als 1. Wert eine ZAHL an, gilt sie als Offset in Sekunden –
+   * so funktionieren auch ältere Aufrufe wie setLocation(lat, lon, name, 3600).
+   */
+  function storeTimeZone(timeZone, utcOffsetSeconds) {
+    const isNum = (v) => typeof v === "number" && isFinite(v);
+    if (isNum(timeZone)) {
+      utcOffsetSeconds = timeZone;
+      timeZone = undefined;
+    }
+    state.timeZone = typeof timeZone === "string" && timeZone ? timeZone : undefined;
+    state.utcOffsetSeconds = isNum(utcOffsetSeconds) ? utcOffsetSeconds : undefined;
+  }
+
+  /**
    * Ort setzen: Karte zentrieren (Zoom 8) und Marker setzen.
    * Darf auch VOR init aufgerufen werden – dann wird der Ort gemerkt.
+   * Fehlen timeZone und utcOffsetSeconds, erscheinen die Uhrzeiten in Gerätezeit.
    * @param {number} lat
    * @param {number} lon
    * @param {string} [name]               Ortsname für den Tooltip
-   * @param {number} [utcOffsetSeconds]   optional: Uhrzeiten in Ortszeit anzeigen
+   * @param {string|number} [timeZone]    Zeitzonen-Name des Orts, z. B. "Europe/Berlin"
+   *                                      (eine Zahl wird als Offset in Sekunden verstanden)
+   * @param {number} [utcOffsetSeconds]   Rückfall, falls der Browser den Namen nicht kennt
    */
-  function setLocation(lat, lon, name, utcOffsetSeconds) {
+  function setLocation(lat, lon, name, timeZone, utcOffsetSeconds) {
     if (typeof lat !== "number" || typeof lon !== "number" || isNaN(lat) || isNaN(lon)) return;
-    state.location = {
-      lat: lat,
-      lon: lon,
-      name: name || "",
-      utcOffsetSeconds: typeof utcOffsetSeconds === "number" ? utcOffsetSeconds : undefined,
-    };
+    state.location = { lat: lat, lon: lon, name: name || "" };
+    storeTimeZone(timeZone, utcOffsetSeconds);
     try {
       applyLocation();
       if (state.index >= 0) showFrame(state.index); // Uhrzeit ggf. in Ortszeit
     } catch (err) {
       console.error("Radar setLocation:", err);
+    }
+  }
+
+  /**
+   * Nur die Zeitzone der Uhrzeiten setzen – die Karte bleibt, wo sie ist.
+   * Gedacht für das erneute Laden desselben Orts (z. B. „Erneut versuchen“
+   * oder Auto-Aktualisierung): Hat der Nutzer die Karte verschoben, springt
+   * sie dadurch nicht zurück.
+   * @param {string|number} [timeZone]    Zeitzonen-Name oder Offset in Sekunden
+   * @param {number} [utcOffsetSeconds]   Rückfall-Offset in Sekunden
+   */
+  function setTimeZone(timeZone, utcOffsetSeconds) {
+    storeTimeZone(timeZone, utcOffsetSeconds);
+    try {
+      if (state.index >= 0) showFrame(state.index); // Zeitlabel neu schreiben
+    } catch (err) {
+      console.error("Radar setTimeZone:", err);
     }
   }
 
@@ -578,6 +639,7 @@ window.Wetter = window.Wetter || {};
   window.Wetter.radar = {
     init: init,
     setLocation: setLocation,
+    setTimeZone: setTimeZone,
     invalidateSize: invalidateSize,
   };
 })();

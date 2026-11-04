@@ -289,7 +289,10 @@ window.Wetter = window.Wetter || {};
 
     return {
       timezone: raw.timezone || null,
-      // Abstand der Ortszeit zu UTC in Sekunden (z. B. 3600 für MEZ).
+      // Abstand der Ortszeit zu UTC in Sekunden (z. B. 3600 für MEZ) – gilt nur
+      // für JETZT. Zum Formatieren besser `timezone` nehmen (kennt die
+      // Zeitumstellung); der Offset ist nur der Rückfall, falls der Browser
+      // den Zeitzonen-Namen nicht kennt.
       // Fehlt er, bleibt er undefined → formatTime nimmt die Gerätezeit.
       utcOffsetSeconds:
         typeof raw.utc_offset_seconds === "number" ? raw.utc_offset_seconds : undefined,
@@ -385,32 +388,70 @@ window.Wetter = window.Wetter || {};
     }
   }
 
+  /** true, wenn v eine echte, endliche Zahl ist. */
+  function isNum(v) {
+    return typeof v === "number" && Number.isFinite(v);
+  }
+
   /**
    * Formatiert eine Zeit in der Ortszeit des Wetterorts.
    *
-   * Trick: Wir verschieben die Zeit um den UTC-Abstand des Ortes und lassen
-   * sie dann als „UTC“ formatieren. Beispiel Tokio (+9 Std.):
-   *   12:00 UTC + 9 Std. = 21:00 → als UTC formatiert: „21:00“ = Ortszeit Tokio.
-   * So stimmt die Uhrzeit auch, wenn das iPad in einer anderen Zeitzone ist.
+   * Der 2. Parameter („zone“) darf dreierlei sein:
    *
-   * @param {Date} date
-   * @param {number} [utcOffsetSeconds] fehlt er, wird die Gerätezeit benutzt
-   * @param {object} [opts] Optionen für Intl.DateTimeFormat,
-   *                        Standard: Stunde und Minute („14:45“)
+   *   1. Ein Zeitzonen-NAME (Text), z. B. "Europe/Berlin" aus data.timezone.
+   *      Das ist der beste Weg: Der Browser kennt die Regeln für Sommer- und
+   *      Winterzeit und rechnet für JEDEN Zeitpunkt den richtigen Abstand zu UTC
+   *      aus. Beispiel Berlin: Am 28.03.2027 um 2 Uhr springt die Uhr auf 3 Uhr –
+   *      Zeiten danach werden automatisch mit +2 Std. statt +1 Std. angezeigt.
+   *
+   *   2. Ein fester Abstand zu UTC in Sekunden (Zahl), z. B. 3600 für MEZ.
+   *      Rückfall-Lösung, falls kein Name bekannt ist. Achtung: Dieser Abstand
+   *      gilt nur für „jetzt“. Liegt eine Zeitumstellung im angezeigten Zeitraum,
+   *      sind Zeiten danach um eine Stunde verschoben.
+   *      Trick dabei: Zeit um den Abstand verschieben und als „UTC“ formatieren.
+   *      Beispiel Tokio (+9 Std.): 12:00 UTC + 9 Std. = „21:00“ = Ortszeit Tokio.
+   *
+   *   3. Nichts (undefined/null) → Zeitzone des Geräts.
+   *
+   * Ist der Zeitzonen-Name ungültig (der Browser kennt ihn nicht und wirft
+   * einen RangeError), nehmen wir fallbackOffset (falls angegeben), sonst die
+   * Gerätezeit. So stürzt die Anzeige nie ab.
+   *
+   * @param {Date|number} date             Zeitpunkt (Date oder Millisekunden)
+   * @param {string|number} [zone]         Zeitzonen-Name ODER Offset in Sekunden
+   * @param {object} [opts]                Optionen für Intl.DateTimeFormat,
+   *                                       Standard: Stunde und Minute („14:45“)
+   * @param {number} [fallbackOffset]      Offset in Sekunden, falls der Name ungültig ist
    * @returns {string} formatierte Zeit, "" bei ungültigem Datum
    */
-  function formatTime(date, utcOffsetSeconds, opts) {
+  function formatTime(date, zone, opts, fallbackOffset) {
     const d = date instanceof Date ? date : new Date(date);
     if (date === null || date === undefined || isNaN(d.getTime())) return "";
 
     const options = opts || { hour: "2-digit", minute: "2-digit" };
 
-    if (typeof utcOffsetSeconds !== "number" || !Number.isFinite(utcOffsetSeconds)) {
-      // Kein Offset bekannt → in der Zeitzone des Geräts anzeigen.
-      return new Intl.DateTimeFormat("de-DE", options).format(d);
+    // Fall 1: Zeitzonen-Name → der Browser rechnet Sommer-/Winterzeit selbst.
+    if (typeof zone === "string" && zone) {
+      try {
+        return new Intl.DateTimeFormat("de-DE", { ...options, timeZone: zone }).format(d);
+      } catch (err) {
+        // Meist ein RangeError = unbekannte Zeitzone. Dann mit dem
+        // Rückfall-Offset (bzw. der Gerätezeit) weitermachen.
+        zone = fallbackOffset;
+      }
+    } else if (!isNum(zone)) {
+      // Kein Name und keine Zahl → evtl. hilft der Rückfall-Offset.
+      zone = fallbackOffset;
     }
-    const shifted = new Date(d.getTime() + utcOffsetSeconds * 1000);
-    return new Intl.DateTimeFormat("de-DE", { ...options, timeZone: "UTC" }).format(shifted);
+
+    // Fall 2: fester Offset in Sekunden.
+    if (isNum(zone)) {
+      const shifted = new Date(d.getTime() + zone * 1000);
+      return new Intl.DateTimeFormat("de-DE", { ...options, timeZone: "UTC" }).format(shifted);
+    }
+
+    // Fall 3: nichts bekannt → in der Zeitzone des Geräts anzeigen.
+    return new Intl.DateTimeFormat("de-DE", options).format(d);
   }
 
   Wetter.api = {
