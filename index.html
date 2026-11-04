@@ -42,6 +42,9 @@
 <!-- Die Klassen am body (wx-<gruppe>, is-night) setzt app.js je nach Wetter.
      Startwert: „partly“ am Tag, damit vor dem Laden schon ein Verlauf zu sehen ist. -->
 <body class="wx-partly">
+  <canvas id="wx-effects" aria-hidden="true"></canvas>
+  <!-- ↑ Dezente Wetteranimation (Regen, Schnee, Wolken …) hinter allen Inhalten.
+       Wird von js/effects.js gezeichnet; aria-hidden: reine Dekoration. -->
 
   <div id="app">
 
@@ -158,6 +161,7 @@
   <script src="js/favorites.js"></script>
   <script src="js/nowcast.js"></script>
   <script src="js/radar.js"></script>
+  <script src="js/effects.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

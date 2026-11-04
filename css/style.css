@@ -1032,3 +1032,21 @@ body.is-loading #daily { opacity: 0.75; transition: opacity 0.3s; }
   .day { min-height: 48px; font-size: 17px; }
   .card { padding: 14px 16px; }
 }
+
+/* ================================================================== */
+/* Wetteranimation im Hintergrund (Canvas #wx-effects, js/effects.js)  */
+/* ================================================================== */
+/* Das Canvas bedeckt fest den ganzen Bildschirm. Stapelreihenfolge:
+   Es hat wie der Verlauf (body::before) z-index -1, steht im HTML aber
+   NACH ihm (erstes Kind von body) und wird deshalb ÜBER dem Verlauf, aber
+   UNTER allen Inhalten gezeichnet (body bildet mit isolation: isolate einen
+   eigenen Stapelkontext). pointer-events: none → Klicks gehen hindurch. */
+#wx-effects {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  display: block;
+  pointer-events: none;
+}
