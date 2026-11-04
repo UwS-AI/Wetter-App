@@ -82,6 +82,11 @@ window.Wetter = window.Wetter || {};
     // langer Pause veraltete Radarbilder).
     staleAfter: 5 * 60 * 1000,
     fetchTimeout: 10000, // 10 s, wie bei Wetter.api
+    // Schlägt ein Abruf fehl (z. B. WLAN nach dem Aufwecken noch nicht da),
+    // versuchen wir es bald erneut: 30 s, 1 min, 2 min, dann alle 5 min.
+    retryDelays: [30 * 1000, 60 * 1000, 2 * 60 * 1000, 5 * 60 * 1000],
+    // Ist das neueste gemessene Radarbild älter als das, zeigen wir einen Hinweis.
+    oldFrameAfter: 30 * 60 * 1000,
   };
 
   // ---------------------------------------------------------------------
@@ -102,6 +107,8 @@ window.Wetter = window.Wetter || {};
     refreshTimer: null, // setInterval für das Neuladen der Frameliste
     lastFetchAt: 0, // Zeitpunkt (ms) des letzten ERFOLGREICHEN Abrufs der Frameliste
     fetching: false, // läuft gerade ein Abruf? (verhindert doppelte Abrufe)
+    retryTimer: null, // setTimeout für den nächsten Versuch nach einem Fehler
+    retryCount: 0, // wie viele Fehlversuche in Folge
     resumeOnVisible: false, // nach dem Zurückkehren in den Tab weiterspielen?
     location: null, // { lat, lon, name } – auch vor init merken
     timeZone: undefined, // Zeitzonen-Name des Orts, z. B. "Europe/Berlin"
@@ -436,10 +443,11 @@ window.Wetter = window.Wetter || {};
       // Gibt es schon Bilder, bleiben die stehen – nur ein Hinweis.
       setStatus(
         state.frames.length
-          ? "Radar konnte nicht aktualisiert werden"
-          : "Radar momentan nicht erreichbar"
+          ? "Radar konnte nicht aktualisiert werden – neuer Versuch folgt"
+          : "Radar momentan nicht erreichbar – neuer Versuch folgt"
       );
       if (!state.frames.length) setControlsEnabled(false);
+      scheduleRetry();
       return;
     } finally {
       // „finally“ läuft immer – auch nach dem return oben.
@@ -455,6 +463,7 @@ window.Wetter = window.Wetter || {};
 
     // Ab hier haben wir eine brauchbare, frische Liste.
     state.lastFetchAt = Date.now();
+    cancelRetry();
 
     // Merken, was gerade angezeigt wird, um die Position zu behalten.
     const wasAtLastPast = state.index === state.lastPastIndex;
@@ -495,8 +504,47 @@ window.Wetter = window.Wetter || {};
     setControlsEnabled(true);
     if (state.els.play) state.els.play.disabled = state.frames.length < 2;
     showFrame(target);
-    setStatus("");
+    setStatus(oldFrameHint());
     if (wasPlaying) play();
+  }
+
+  /**
+   * Hinweistext, falls selbst das NEUESTE gemessene Bild schon alt ist
+   * (z. B. Störung bei RainViewer). Sonst leerer Text.
+   */
+  function oldFrameHint() {
+    const last = state.frames[state.lastPastIndex];
+    if (!last) return "";
+    const ageMs = Date.now() - last.time * 1000;
+    if (ageMs < CONFIG.oldFrameAfter) return "";
+    return "Hinweis: Das neueste Radarbild ist schon " + Math.round(ageMs / 60000) + " Min. alt.";
+  }
+
+  /** Nach einem Fehler den nächsten Versuch planen (immer nur EIN Timer). */
+  function scheduleRetry() {
+    if (state.retryTimer) return;
+    const delays = CONFIG.retryDelays;
+    const delay = delays[Math.min(state.retryCount, delays.length - 1)];
+    state.retryCount++;
+    state.retryTimer = setTimeout(() => {
+      state.retryTimer = null;
+      // Versteckte Seite: nicht abrufen – das erledigt onVisibilityChange,
+      // sobald die Seite wieder sichtbar ist (letzter Erfolg ist dann „alt“).
+      if (!document.hidden) loadFrames();
+    }, delay);
+  }
+
+  /** Geplanten Wiederholungsversuch verwerfen (nach einem Erfolg). */
+  function cancelRetry() {
+    if (state.retryTimer) clearTimeout(state.retryTimer);
+    state.retryTimer = null;
+    state.retryCount = 0;
+  }
+
+  /** Internet ist wieder da (z. B. WLAN nach dem Aufwecken) → sofort neu laden. */
+  function onOnline() {
+    if (document.hidden) return;
+    if (Date.now() - state.lastFetchAt > CONFIG.staleAfter || !state.frames.length) loadFrames();
   }
 
   // ---------------------------------------------------------------------
@@ -658,6 +706,7 @@ window.Wetter = window.Wetter || {};
       });
     }
     document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("online", onOnline);
 
     // Frames laden und alle 10 Minuten aktualisieren (nur EIN Intervall).
     setStatus("Radar wird geladen …");
