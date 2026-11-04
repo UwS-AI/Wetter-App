@@ -35,7 +35,7 @@ notes.md           Lernnotizen
 
 - Wetter und Ortssuche: [Open-Meteo](https://open-meteo.com/) (kein API-Key)
 - Regenradar: [RainViewer](https://www.rainviewer.com/api.html)
-- Karte: © OpenStreetMap-Mitwirkende, © CARTO, Bibliothek [Leaflet](https://leafletjs.com/)
+- Karte: © OpenStreetMap-Mitwirkende (freie Kacheln, kein API-Key), Bibliothek [Leaflet](https://leafletjs.com/)
 - Ortsname zur GPS-Position: BigDataCloud (kostenlos, ohne Key)
 
 Hinweis: „Mein Standort“ funktioniert im Browser nur über https (z. B. GitHub Pages).

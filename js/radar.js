@@ -22,7 +22,7 @@
  *   #radar-status  Hinweis- oder Fehlertext (sonst leer)
  *
  * So funktioniert's (Kurzfassung):
- *   1. Leaflet (globale Variable L) baut die Karte mit CARTO-Hintergrundkacheln.
+ *   1. Leaflet (globale Variable L) baut die Karte mit OpenStreetMap-Kacheln.
  *   2. Von RainViewer holen wir eine Liste von Radarbildern („Frames“):
  *      gemessene Bilder der Vergangenheit (radar.past) und – falls vorhanden –
  *      eine Kurzprognose (radar.nowcast). Jedes Frame hat {time, path}.
@@ -53,12 +53,14 @@ window.Wetter = window.Wetter || {};
   const CONFIG = {
     // Liste der verfügbaren Radarbilder
     framesUrl: "https://api.rainviewer.com/public/weather-maps.json",
-    // Hintergrundkarte von CARTO („Voyager“). {s} = Subdomain a–d,
-    // {r} = „@2x“ auf Retina-Bildschirmen (ersetzt Leaflet automatisch).
-    baseUrl: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+    // Hintergrundkarte: die freie Standardkarte von OpenStreetMap.
+    // Kein API-Schlüssel nötig. Bedingungen: Quellenangabe anzeigen (siehe
+    // baseAttribution) und keine Massenabrufe – für eine private App kein Thema.
+    // (Früher: CARTO „Voyager“ – das verlangt inzwischen einen API-Schlüssel
+    // und blendet sonst „API KEY REQUIRED“ in die Karte ein.)
+    baseUrl: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     baseAttribution:
-      '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>-Mitwirkende, ' +
-      '© <a href="https://carto.com/attributions">CARTO</a>',
+      '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>-Mitwirkende',
     radarAttribution: 'Radar: <a href="https://www.rainviewer.com/api.html">RainViewer</a>',
     // Radar-Kacheln: Größe 256, Farbschema 2, geglättet (1), Schnee anzeigen (1)
     radarTileSuffix: "/256/{z}/{x}/{y}/2/1_1.png",
@@ -633,7 +635,6 @@ window.Wetter = window.Wetter || {};
       state.map.on("movestart", onMapMoveStart);
       state.map.on("zoomstart", onMapMoveStart);
       L.tileLayer(CONFIG.baseUrl, {
-        subdomains: "abcd",
         maxZoom: CONFIG.maxZoom,
         attribution: CONFIG.baseAttribution,
       }).addTo(state.map);
