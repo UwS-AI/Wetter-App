@@ -24,9 +24,9 @@
  * Ein Eintrag mit time = 14:45 beschreibt also den Regen von 14:30 bis 14:45,
  * d. h. das Intervall [time − 15 min, time).
  *
- * Diese Annahme steckt in der Konstante PERIOD_ENDS_AT_TIME. Falls sich
- * herausstellt, dass es umgekehrt ist ([time, time + 15 min)), muss man nur
- * diese eine Konstante auf `false` setzen.
+ * WICHTIG: js/api.js rechnet die Zeiten bereits auf den BEGINN des Intervalls
+ * um (time = T − 15 min). Die Daten, die hier ankommen, beschreiben also
+ * [time, time + 15 min). Deshalb steht PERIOD_ENDS_AT_TIME auf `false`.
  */
 
 window.Wetter = window.Wetter || {};
@@ -45,10 +45,10 @@ window.Wetter = window.Wetter || {};
   const STEP_MS = 15 * 60 * 1000;
 
   /**
-   * true  → Eintrag beschreibt [time − 15 min, time)   (Open-Meteo-Konvention)
-   * false → Eintrag beschreibt [time, time + 15 min)
+   * true  → Eintrag beschreibt [time − 15 min, time)   (rohe Open-Meteo-Daten)
+   * false → Eintrag beschreibt [time, time + 15 min)   (so liefert es js/api.js)
    */
-  const PERIOD_ENDS_AT_TIME = true;
+  const PERIOD_ENDS_AT_TIME = false;
 
   /**
    * Grenzen für intensityLabel in mm pro 15 Minuten.

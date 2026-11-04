@@ -35,8 +35,8 @@ window.Wetter = window.Wetter || {};
   const DAILY_COUNT = 7; //   7 Tage
   const MINUTELY_COUNT = 12; // 12 × 15 Minuten = 3 Stunden
 
-  // Open-Meteo liefert die 15-Minuten-Werte ab Beginn der laufenden
-  // Viertelstunde. Wir fragen 16 Werte an (= 4 Stunden), damit nach dem
+  // Open-Meteo liefert die 15-Minuten-Werte ab der laufenden Viertelstunde
+  // (Zeitstempel = ENDE des Zeitraums, siehe normalize()). Wir fragen 16 Werte an (= 4 Stunden), damit nach dem
   // Herausfiltern bereits vergangener Zeitfenster sicher 12 übrig bleiben.
   const MINUTELY_REQUEST = 16;
 
@@ -246,12 +246,17 @@ window.Wetter = window.Wetter || {};
     }
 
     // --- 15 Minuten: ab der laufenden Viertelstunde, 12 Einträge ---
-    const mTimes = timesOf(m);
-    const mStart = startIndex(mTimes, nowSec, 900);
+    // Achtung, Open-Meteo-Konvention: Ein Wert mit Zeit T ist die Summe der
+    // VORANGEHENDEN 15 Minuten, also des Zeitraums [T−15 min, T).
+    // Damit es in der App einfacher wird, rechnen wir auf den BEGINN des
+    // Zeitraums um: time = T − 15 min. Ab dann gilt überall:
+    // ein Eintrag deckt [time, time + 15 min) ab.
+    const mStartTimes = timesOf(m).map((t) => (typeof t === "number" ? t - 900 : t));
+    const mStart = startIndex(mStartTimes, nowSec, 900);
     const minutely = [];
-    for (let i = mStart; i < mTimes.length && minutely.length < MINUTELY_COUNT; i++) {
+    for (let i = mStart; i < mStartTimes.length && minutely.length < MINUTELY_COUNT; i++) {
       minutely.push({
-        time: toDate(mTimes[i]),
+        time: toDate(mStartTimes[i]),
         precip: at(m.precipitation, i), // mm pro 15 Minuten
       });
     }
