@@ -74,14 +74,22 @@ body {
   font-family: var(--font);
   color: var(--text);
   line-height: 1.35;
-  /* Farbverlauf als Hintergrund – Farben kommen aus den Variablen */
   background-color: var(--bg-top);
-  background-image: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
-  background-attachment: fixed;
   /* kein grauer Blitz beim Antippen auf iOS */
   -webkit-tap-highlight-color: transparent;
   overflow-x: hidden;   /* nie seitlich scrollen */
-  transition: background-color 0.6s ease;
+}
+
+/* Der Farbverlauf liegt als eigene, fest stehende Ebene hinter allem.
+   (background-attachment: fixed funktioniert in Safari auf iOS nicht –
+   ein position:fixed-Element schon.) Farben kommen aus den Variablen. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+  pointer-events: none;
 }
 
 /* Hintergrund je Wettergruppe (Klasse am body, gesetzt von app.js).
