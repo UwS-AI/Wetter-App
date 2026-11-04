@@ -473,6 +473,18 @@ window.Wetter = window.Wetter || {};
     body.classList.add("wx-" + group);
     body.classList.toggle("is-night", cur.isDay === false);
 
+    // Hintergrund-Animation (Regen, Schnee, Sterne …) mit den echten Daten füttern.
+    // Open-Meteo liefert den aktuellen Niederschlag als Summe der letzten
+    // 15 Minuten – mal 4 ergibt ungefähr mm pro Stunde.
+    if (Wetter.effects) {
+      try {
+        Wetter.effects.update({
+          code: cur.code, isDay: cur.isDay, windSpeed: cur.wind, windDir: cur.windDir,
+          precip: typeof cur.precip === "number" ? cur.precip * 4 : null,
+        });
+      } catch (err) { console.warn("Animation:", err); }
+    }
+
     // Farbe der Safari-Leiste an den oberen Verlaufston anpassen
     const meta = document.querySelector('meta[name="theme-color"]');
     const top = getComputedStyle(body).getPropertyValue("--bg-top").trim();
