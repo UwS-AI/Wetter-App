@@ -133,7 +133,11 @@ window.Wetter = window.Wetter || {};
   /** Untertitel eines Orts: „Region, Land“ (doppelte Angaben weglassen) */
   function placeSub(place) {
     if (!place) return "";
-    if (place.id === "gps") return "📍 Aktueller Standort";
+    if (place.id === "gps") {
+      // Bei GPS-Orten zusätzlich die Genauigkeit der Ortung (falls bekannt)
+      const acc = accuracyText(place.accuracy);
+      return "📍 Aktueller Standort" + (acc ? " · " + acc : "");
+    }
     const parts = [];
     for (const part of [place.admin1, place.country]) {
       if (part && part !== place.name && !parts.includes(part)) parts.push(part);
@@ -272,6 +276,12 @@ window.Wetter = window.Wetter || {};
         retry();
       });
       box.append(btn);
+      // Zusätzlich ein ✕ zum Schließen, damit die Meldung nichts dauerhaft verdeckt
+      const close = el("button", "status-close", "✕");
+      close.type = "button";
+      close.setAttribute("aria-label", "Meldung schließen");
+      close.addEventListener("click", hideStatus);
+      box.append(close);
     } else {
       // Meldungen ohne Knopf verschwinden nach ein paar Sekunden von selbst
       const shown = box.lastChild;
@@ -383,6 +393,9 @@ window.Wetter = window.Wetter || {};
         console.warn("Fehler beim Anzeigen von „" + name + "“:", err);
       }
     }
+    // Die Inhalte können die Höhe der Radar-Karte verändert haben (Grid/Flex).
+    // Leaflet muss das wissen, sonst sitzt der Ortsmarker nicht in der Mitte.
+    requestAnimationFrame(() => radarCall("invalidateSize"));
   }
 
   /** Hintergrund-Verlauf passend zum Wetter (Klassen wx-<gruppe> und is-night am body) */
@@ -450,7 +463,7 @@ window.Wetter = window.Wetter || {};
 
   /**
    * Eine Kachel bauen.
-   * @param {string} label  Überschrift („Wind“)
+   * @param {string} label  Überschrift mit kleinem Symbol („💨 Wind“)
    * @param {string} value  großer Wert („18“)
    * @param {string} unit   Einheit („km/h“) – darf leer sein
    * @param {string} sub    kleine Zusatzzeile – darf leer sein
@@ -459,6 +472,7 @@ window.Wetter = window.Wetter || {};
   function tile(label, value, unit, sub, extra) {
     const box = el("div", "detail-tile");
     box.append(el("span", "tile-label", label));
+    box.title = label.replace(/^\S+\s/, "");   // Tooltip: Überschrift ohne Emoji
 
     const valueLine = el("span", "tile-value");
     if (extra) valueLine.append(extra);
@@ -495,13 +509,13 @@ window.Wetter = window.Wetter || {};
     return "Extrem";
   }
 
-  /** Dauer in ms → „9 Std. 12 Min.“ */
+  /** Dauer in ms → „9 h 12 min“ (kurz, passt in die Kacheln) */
   function fmtDuration(ms) {
     if (!isNum(ms) || ms < 0) return "";
     const totalMin = Math.round(ms / 60000);
     const h = Math.floor(totalMin / 60);
     const m = totalMin % 60;
-    return h > 0 ? h + " Std. " + m + " Min." : m + " Min.";
+    return h > 0 ? h + " h " + m + " min" : m + " min";
   }
 
   function renderDetails() {
@@ -518,43 +532,44 @@ window.Wetter = window.Wetter || {};
     let feelsSub = "";
     if (isNum(cur.feels) && isNum(cur.temp)) {
       const diff = cur.feels - cur.temp;
-      feelsSub = diff <= -2 ? "Kälter als gemessen" : diff >= 2 ? "Wärmer als gemessen" : "Wie gemessen";
+      // kurz halten – die Kacheln sind auf dem iPad quer recht schmal
+      feelsSub = diff <= -2 ? Math.round(-diff) + "° kälter" : diff >= 2 ? Math.round(diff) + "° wärmer" : "Wie gemessen";
     }
-    tiles.push(tile("Gefühlt", fmtTemp(cur.feels), "", feelsSub));
+    tiles.push(tile("🌡️ Gefühlt", fmtTemp(cur.feels), "", feelsSub));
 
     // Wind: Stärke + Richtung (Text + gedrehter Pfeil)
     const dirText = windDirText(cur.windDir);
     const arrow = isNum(cur.windDir) ? windArrow(cur.windDir) : null;
-    const windTile = tile("Wind", fmtNum(cur.wind), "km/h", dirText ? "aus " + dirText : "", arrow);
+    const windTile = tile("💨 Wind", fmtNum(cur.wind), "km/h", dirText ? "aus " + dirText : "", arrow);
     if (dirText) windTile.title = "Wind aus " + dirText + " (" + Math.round(cur.windDir) + "°), Pfeil zeigt die Zugrichtung";
     tiles.push(windTile);
 
     // Böen (+ Tageshöchstwert)
-    const gustSub = isNum(today.gustMax) ? "Heute bis " + fmtNum(today.gustMax) + " km/h" : "";
-    tiles.push(tile("Böen", fmtNum(cur.gusts), "km/h", gustSub));
+    const gustSub = isNum(today.gustMax) ? "Heute max. " + fmtNum(today.gustMax) : "";
+    tiles.push(tile("🌬️ Böen", fmtNum(cur.gusts), "km/h", gustSub));
 
     // Luftfeuchtigkeit
-    tiles.push(tile("Feuchte", fmtNum(cur.humidity), "%", ""));
+    tiles.push(tile("💧 Feuchte", fmtNum(cur.humidity), "%", ""));
 
     // Luftdruck
-    tiles.push(tile("Luftdruck", fmtNum(cur.pressure), "hPa", ""));
+    tiles.push(tile("⏲️ Luftdruck", fmtNum(cur.pressure), "hPa", ""));
 
     // UV-Index
-    tiles.push(tile("UV-Index", fmtNum(cur.uv), "", uvLabel(cur.uv)));
+    tiles.push(tile("😎 UV-Index", fmtNum(cur.uv), "", uvLabel(cur.uv)));
 
     // Sonnenaufgang (+ Tageslänge) und Sonnenuntergang (+ „in X Std.“)
     const rise = toDate(today.sunrise);
     const set = toDate(today.sunset);
     const dayLength = rise && set ? "Tag: " + fmtDuration(set - rise) : "";
-    tiles.push(tile("Sonnenaufgang", rise ? fmtClock(rise) : DASH, "", dayLength));
+    tiles.push(tile("🌅 Aufgang", rise ? fmtClock(rise) : DASH, "", dayLength));
 
     let setSub = "";
     if (set) {
       const now = toDate(cur.time) || new Date();
       const untilSet = set - now;
-      setSub = untilSet > 0 ? "in " + fmtDuration(untilSet) : "Schon untergegangen";
+      setSub = untilSet > 0 ? "in " + fmtDuration(untilSet) : "Schon vorbei";
     }
-    tiles.push(tile("Sonnenuntergang", set ? fmtClock(set) : DASH, "", setSub));
+    tiles.push(tile("🌇 Untergang", set ? fmtClock(set) : DASH, "", setSub));
 
     box.replaceChildren(...tiles);
   }
@@ -691,9 +706,9 @@ window.Wetter = window.Wetter || {};
 
     // Maße der Zeichenfläche
     const width = hours.length * HOUR_W;
-    const height = 70;
-    const padTop = 18;      // Platz für die Beschriftung des Höchstwerts
-    const padBottom = 16;   // Platz für die Beschriftung des Tiefstwerts
+    const height = 62;
+    const padTop = 17;      // Platz für die Beschriftung des Höchstwerts
+    const padBottom = 18;   // Platz für die Beschriftung des Tiefstwerts
 
     const min = Math.min(...valid);
     const max = Math.max(...valid);
@@ -1108,27 +1123,60 @@ window.Wetter = window.Wetter || {};
   /* „Mein Standort“ (GPS)                                                */
   /* ================================================================== */
 
-  /** Fehlercodes der Geolocation-API in freundliche Sätze übersetzen */
+  /**
+   * Fehlercodes der Geolocation-API in hilfreiche deutsche Sätze übersetzen.
+   * Hintergrund: Das iPad hat keinen GPS-Chip. Es ortet über WLAN – oder über
+   * einen externen Bluetooth-GPS-Empfänger, falls einer verbunden ist.
+   */
   function geoErrorText(err) {
-    if (!err) return "Standort konnte nicht ermittelt werden.";
-    switch (err.code) {
-      case 1: return "Standortzugriff nicht erlaubt. Bitte in den Einstellungen erlauben oder einen Ort suchen.";
-      case 2: return "Standort derzeit nicht verfügbar. Bitte später erneut versuchen oder einen Ort suchen.";
-      case 3: return "Standortbestimmung hat zu lange gedauert.";
-      default: return "Standort konnte nicht ermittelt werden.";
+    switch (err && err.code) {
+      case 1: // PERMISSION_DENIED – Nutzer (oder Einstellungen) erlauben es nicht
+        return "Standortzugriff verweigert – in den iOS-Einstellungen unter Chrome/Safari → Standort erlauben.";
+      case 2: // POSITION_UNAVAILABLE – keine Ortung möglich (kein WLAN, kein GPS)
+        return "Standort nicht ermittelbar – ohne GPS-Chip braucht das iPad WLAN oder einen externen GPS-Empfänger. Nutze sonst die Ortssuche.";
+      case 3: // TIMEOUT – hat länger als 20 Sekunden gedauert
+        return "Ortung dauert zu lange – bitte erneut versuchen oder Ort suchen.";
+      default:
+        return "Standort konnte nicht ermittelt werden. Nutze sonst die Ortssuche.";
     }
+  }
+
+  /**
+   * Darf die Seite überhaupt orten? Browser erlauben das nur in einer
+   * „sicheren Umgebung“: https://, localhost oder eine lokale Datei (file://).
+   */
+  function canUseGeolocation() {
+    const proto = location.protocol;
+    const host = location.hostname;
+    return window.isSecureContext === true ||
+      proto === "https:" || proto === "file:" ||
+      host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+  }
+
+  /** Genauigkeit in Metern → „Genauigkeit ± 35 m“ bzw. „± 2,1 km“ */
+  function accuracyText(meters) {
+    if (!isNum(meters) || meters <= 0) return "";
+    if (meters > 1000) return "Genauigkeit ± " + fmtNum(meters / 1000, 1) + " km";
+    return "Genauigkeit ± " + Math.round(meters) + " m";
   }
 
   function onLocate() {
     const btn = $("locate-btn");
-    if (!("geolocation" in navigator)) {
-      showError("Dieses Gerät/dieser Browser kann den Standort nicht bestimmen.");
+
+    // 1. Kann der Browser überhaupt orten?
+    if (!("geolocation" in navigator) || !navigator.geolocation) {
+      showError("Dieser Browser kann den Standort nicht bestimmen. Bitte nutze die Ortssuche.");
+      return;
+    }
+    if (!canUseGeolocation()) {
+      showError("Ortung ist nur über eine sichere Verbindung (https) möglich. Öffne die App per https:// oder nutze die Ortssuche.");
       return;
     }
 
+    // 2. Knopf sperren, solange die Ortung läuft (WLAN/externes GPS kann dauern)
     const original = "📍 Mein Standort";
     btn.disabled = true;
-    btn.textContent = "📍 Suche Standort …";
+    btn.textContent = "📍 Orte …";
     showLoading("Bestimme Standort …");
 
     const done = () => {
@@ -1140,6 +1188,7 @@ window.Wetter = window.Wetter || {};
       async (pos) => {
         const lat = Math.round(pos.coords.latitude * 10000) / 10000;   // 4 Nachkommastellen reichen (~10 m)
         const lon = Math.round(pos.coords.longitude * 10000) / 10000;
+        const accuracy = pos.coords.accuracy;                           // Radius in Metern
 
         // Ortsnamen ermitteln – klappt das nicht, heißt der Ort „Mein Standort“
         let name = null;
@@ -1150,13 +1199,18 @@ window.Wetter = window.Wetter || {};
         }
         done();
         collapseSidebarOnPhone();
-        loadPlace({ id: "gps", name: name || "Mein Standort", admin1: "", country: "", lat, lon });
+        // accuracy ist eine Zusatzangabe nur für die Anzeige in #loc-sub
+        loadPlace({ id: "gps", name: name || "Mein Standort", admin1: "", country: "", lat, lon, accuracy });
       },
       (err) => {
         done();
         showError(geoErrorText(err), onLocate);
       },
-      { enableHighAccuracy: false, timeout: 15000, maximumAge: 5 * 60 * 1000 }
+      {
+        enableHighAccuracy: true,   // externes GPS bzw. beste WLAN-Ortung nutzen
+        timeout: 20000,             // 20 s – WLAN-Ortung / Bluetooth-GPS braucht Zeit
+        maximumAge: 60000,          // eine bis zu 1 Minute alte Position ist ok
+      }
     );
   }
 

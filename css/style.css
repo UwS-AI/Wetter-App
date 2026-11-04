@@ -121,6 +121,14 @@ body.wx-snow:not(.is-night) {
   --glass-strong: rgba(20, 30, 45, 0.42);
 }
 
+/* Nachts sind die Verläufe sehr dunkel – dort wirken leicht HELLE Glasflächen besser */
+body.is-night {
+  --glass: rgba(255, 255, 255, 0.07);
+  --glass-strong: rgba(255, 255, 255, 0.12);
+  --glass-border: rgba(255, 255, 255, 0.12);
+}
+body.is-night .temp-bar { background: rgba(255, 255, 255, 0.12); }
+
 a { color: inherit; }
 
 button, input { font: inherit; color: inherit; }
@@ -258,7 +266,8 @@ button { cursor: pointer; }
   text-align: left;
 }
 .sidebar-toggle-text { flex: 1; }
-.sidebar-toggle-chevron { transition: transform 0.25s; }
+/* inline-block, sonst lässt sich der Pfeil nicht drehen */
+.sidebar-toggle-chevron { display: inline-block; transition: transform 0.25s; }
 #sidebar.is-open .sidebar-toggle-chevron { transform: rotate(180deg); }
 
 /* iPhone: eingeklappt ist nur der Knopf sichtbar */
@@ -280,6 +289,8 @@ button { cursor: pointer; }
   appearance: none;
 }
 #search-input::placeholder { color: var(--text-faint); }
+/* Das kleine ✕ zum Leeren (Safari/Chrome) hell einfärben */
+#search-input::-webkit-search-cancel-button { filter: invert(1) brightness(1.4); opacity: 0.7; cursor: pointer; }
 #search-input:focus { background: rgba(255, 255, 255, 0.24); border-color: rgba(255, 255, 255, 0.4); }
 
 /* Trefferliste: schwebt unter dem Suchfeld */
@@ -816,6 +827,19 @@ button { cursor: pointer; }
 }
 .status-text { min-width: 0; }
 
+.status-close {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  margin-right: -8px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 16px;
+}
+.status-close:hover { background: rgba(255, 255, 255, 0.15); color: #fff; }
+
 .status-retry {
   flex: none;
   min-height: 36px;
@@ -866,8 +890,11 @@ body.is-loading #daily { opacity: 0.75; transition: opacity 0.3s; }
     grid-template-areas:
       "sidebar sidebar"
       "main    side";
-    align-items: start;
+    /* beide Spalten gleich hoch – das Radar füllt rechts den Rest */
+    align-items: stretch;
   }
+  #radar { flex: 1 1 auto; }
+  .radar-map { flex: 1 1 auto; min-height: 340px; }
 
   /* Klapp-Knopf nicht nötig – Inhalt immer sichtbar */
   .sidebar-toggle { display: none; }
@@ -902,8 +929,9 @@ body.is-loading #daily { opacity: 0.75; transition: opacity 0.3s; }
   .fav-sub { display: none; }
   .fav-item { display: flex; align-items: center; }
 
-  .details-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .radar-map { height: 380px; }
+  /* Hauptspalte ist hier nur ~420 px breit → 2 Kacheln nebeneinander */
+  .details-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .radar-map { height: auto; }
 }
 
 /* ---------- iPad quer (≥ 1024 px UND Querformat): 3 Spalten, kein Seiten-Scroll ---------- */
@@ -971,10 +999,18 @@ body.is-loading #daily { opacity: 0.75; transition: opacity 0.3s; }
   .radar-map { flex: 1 1 auto; height: auto; min-height: 200px; }
 
   /* Hauptbereich etwas kompakter, damit alles auf 820 px Höhe passt */
-  .current-head { padding: 0 0 8px; }
-  .current-temp { font-size: 80px; }
-  .current-icon { font-size: 48px; }
-  .details-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .current-head { padding: 0 0 6px; }
+  #loc-name { font-size: 28px; }
+  .current-temp { font-size: 72px; }
+  .current-icon { font-size: 44px; }
+  .current-desc { font-size: 18px; margin-top: 2px; }
+  .details-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+  .detail-tile { padding: 7px 10px; }
+  .tile-value { font-size: 20px; }
+  .card { padding: 10px 14px; }
+  .card-title { margin-bottom: 6px; padding-bottom: 6px; }
+  .nowcast-text { margin-bottom: 8px; }
+  .nc-track { height: 38px; }
 }
 
 /* Großes iPad quer (z. B. 1366 × 1024): mehr Luft und größere Schrift */

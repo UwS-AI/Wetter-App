@@ -438,7 +438,11 @@ window.Wetter = window.Wetter || {};
     const loc = state.location;
     if (!state.map || !loc) return;
     const latlng = [loc.lat, loc.lon];
-    const name = loc.name || "Standort";
+    // Sicherheit: Leaflet würde einen Text-Tooltip als HTML deuten. Ein Ortsname
+    // aus dem Internet könnte so Schadcode einschleusen. Deshalb bauen wir ein
+    // <span> und setzen den Namen per textContent – das ist immer nur Text.
+    const label = document.createElement("span");
+    label.textContent = loc.name || "Standort";
     if (!state.marker) {
       // Gut sichtbarer Punkt: weißer Rand, kräftige Füllung.
       state.marker = L.circleMarker(latlng, {
@@ -449,10 +453,10 @@ window.Wetter = window.Wetter || {};
         fillOpacity: 1,
       }).addTo(state.map);
       // Dauerhaft sichtbarer Tooltip – auf dem iPad gibt es kein „Hover“.
-      state.marker.bindTooltip(name, { permanent: true, direction: "top", offset: [0, -10] });
+      state.marker.bindTooltip(label, { permanent: true, direction: "top", offset: [0, -10] });
     } else {
       state.marker.setLatLng(latlng);
-      state.marker.setTooltipContent(name);
+      state.marker.setTooltipContent(label);
     }
     state.map.setView(latlng, CONFIG.startZoom);
   }
