@@ -21,8 +21,8 @@
 /* ------------------------------------------------------------------ */
 :root {
   /* Glas-Kacheln: leicht dunkle, halbtransparente Fläche + Unschärfe */
-  --glass: rgba(16, 28, 48, 0.22);
-  --glass-strong: rgba(16, 28, 48, 0.34);
+  --glass: rgba(3, 32, 38, 0.24);
+  --glass-strong: rgba(3, 32, 38, 0.36);
   --glass-border: rgba(255, 255, 255, 0.14);
   --glass-blur: blur(22px) saturate(150%);
 
@@ -31,7 +31,8 @@
   --text-dim: rgba(255, 255, 255, 0.72);
   --text-faint: rgba(255, 255, 255, 0.5);
   --line: rgba(255, 255, 255, 0.16);
-  --rain: #7cc7ff;           /* Farbe für Regen-Angaben */
+  --rain: #8be0f2;           /* Farbe für Regen-Angaben (helles Türkis) */
+  --accent: #e9c46a;         /* Akzent: Sonnengelb (Stern, Hervorhebungen) */
 
   --radius: 18px;            /* Rundung der Karten */
   --radius-sm: 12px;
@@ -48,9 +49,10 @@
   --pad-bottom: max(12px, env(safe-area-inset-bottom));
   --pad-left: max(12px, env(safe-area-inset-left));
 
-  /* Hintergrund-Verlauf: Standard (wird je Wetter überschrieben) */
-  --bg-top: #3a7bd5;
-  --bg-bottom: #8fbfe8;
+  /* Hintergrund-Verlauf: Standard (wird je Wetter überschrieben).
+     Farbfamilie „Petrol & Türkis“ – bewusst anders als das Apple-Blau. */
+  --bg-top: #0f4c5c;
+  --bg-bottom: #2a9d8f;
 }
 
 /* ------------------------------------------------------------------ */
@@ -64,7 +66,8 @@ html {
   /* verhindert, dass iOS beim Drehen die Schrift automatisch vergrößert */
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
-  background: var(--bg-top);
+  /* Dunkles Petrol: sichtbar nur beim „Überscrollen“ auf iOS */
+  background: #06161a;
 }
 
 body {
@@ -75,6 +78,9 @@ body {
   color: var(--text);
   line-height: 1.35;
   background-color: var(--bg-top);
+  /* Eigener Stapelkontext: sonst würde der Verlauf (body::before mit
+     z-index -1) UNTER der body-Hintergrundfarbe landen und unsichtbar sein. */
+  isolation: isolate;
   /* kein grauer Blitz beim Antippen auf iOS */
   -webkit-tap-highlight-color: transparent;
   overflow-x: hidden;   /* nie seitlich scrollen */
@@ -94,31 +100,31 @@ body::before {
 
 /* Hintergrund je Wettergruppe (Klasse am body, gesetzt von app.js).
    Jeweils oben/unten-Farbe für Tag … */
-body.wx-clear   { --bg-top: #2a74c9; --bg-bottom: #75b6ee; }
-body.wx-partly  { --bg-top: #3b6fa8; --bg-bottom: #86aed3; }
-body.wx-cloudy  { --bg-top: #56677d; --bg-bottom: #8d9bad; }
-body.wx-fog     { --bg-top: #6b7682; --bg-bottom: #a3abb4; }
-body.wx-drizzle { --bg-top: #4a5c72; --bg-bottom: #7a8ca0; }
-body.wx-rain    { --bg-top: #3c4d63; --bg-bottom: #697d94; }
-body.wx-snow    { --bg-top: #6a7f9c; --bg-bottom: #aab9cc; }
-body.wx-storm   { --bg-top: #2b3142; --bg-bottom: #4f566b; }
+body.wx-clear   { --bg-top: #0f4c5c; --bg-bottom: #2a9d8f; }   /* Petrol → Türkis */
+body.wx-partly  { --bg-top: #1d5866; --bg-bottom: #4a9e98; }
+body.wx-cloudy  { --bg-top: #3d5a5b; --bg-bottom: #6b8f8e; }   /* gedecktes Grün-Grau */
+body.wx-fog     { --bg-top: #55706f; --bg-bottom: #8fa9a6; }
+body.wx-drizzle { --bg-top: #2c4b4c; --bg-bottom: #557b79; }
+body.wx-rain    { --bg-top: #1f3b3a; --bg-bottom: #3e6260; }   /* Schiefergrün */
+body.wx-snow    { --bg-top: #4f7a80; --bg-bottom: #9cc3c4; }
+body.wx-storm   { --bg-top: #142626; --bg-bottom: #34504f; }
 
-/* … und für die Nacht (zusätzliche Klasse is-night). */
-body.is-night.wx-clear   { --bg-top: #070f2b; --bg-bottom: #1f3366; }
-body.is-night.wx-partly  { --bg-top: #0f1c3a; --bg-bottom: #2d3f66; }
-body.is-night.wx-cloudy  { --bg-top: #1b212c; --bg-bottom: #3a4352; }
-body.is-night.wx-fog     { --bg-top: #22272f; --bg-bottom: #474f5c; }
-body.is-night.wx-drizzle { --bg-top: #141b27; --bg-bottom: #2f3a4c; }
-body.is-night.wx-rain    { --bg-top: #10161f; --bg-bottom: #2b3546; }
-body.is-night.wx-snow    { --bg-top: #1f2a40; --bg-bottom: #47566f; }
-body.is-night.wx-storm   { --bg-top: #0b0d14; --bg-bottom: #262a38; }
+/* … und für die Nacht (zusätzliche Klasse is-night): fast schwarzes Petrol. */
+body.is-night.wx-clear   { --bg-top: #06161a; --bg-bottom: #123a40; }
+body.is-night.wx-partly  { --bg-top: #081c21; --bg-bottom: #1a4048; }
+body.is-night.wx-cloudy  { --bg-top: #101c1d; --bg-bottom: #2a3b3c; }
+body.is-night.wx-fog     { --bg-top: #142122; --bg-bottom: #34494a; }
+body.is-night.wx-drizzle { --bg-top: #0c1819; --bg-bottom: #243a3b; }
+body.is-night.wx-rain    { --bg-top: #091415; --bg-bottom: #1f3435; }
+body.is-night.wx-snow    { --bg-top: #122629; --bg-bottom: #36585c; }
+body.is-night.wx-storm   { --bg-top: #050b0c; --bg-bottom: #1a2829; }
 
 /* Bei hellen Hintergründen (Nebel, Schnee am Tag) die Glasflächen etwas
    dunkler machen, damit die weiße Schrift gut lesbar bleibt. */
 body.wx-fog:not(.is-night),
 body.wx-snow:not(.is-night) {
-  --glass: rgba(20, 30, 45, 0.3);
-  --glass-strong: rgba(20, 30, 45, 0.42);
+  --glass: rgba(3, 32, 38, 0.32);
+  --glass-strong: rgba(3, 32, 38, 0.44);
 }
 
 /* Nachts sind die Verläufe sehr dunkel – dort wirken leicht HELLE Glasflächen besser */
@@ -308,7 +314,7 @@ button { cursor: pointer; }
   border-radius: var(--radius-sm);
   border: 1px solid var(--glass-border);
   /* hier bewusst fast undurchsichtig, damit man die Treffer gut lesen kann */
-  background: rgba(22, 32, 50, 0.92);
+  background: rgba(8, 40, 46, 0.94);
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
@@ -446,7 +452,7 @@ button { cursor: pointer; }
 }
 .fav-toggle:hover { background: rgba(255, 255, 255, 0.12); }
 .fav-toggle:active { transform: scale(0.88); }
-.fav-toggle[aria-pressed="true"] { color: #ffd60a; }   /* gelber Stern */
+.fav-toggle[aria-pressed="true"] { color: var(--accent); }   /* sonnengelber Stern */
 
 .loc-sub {
   margin: 0;
@@ -591,10 +597,10 @@ button { cursor: pointer; }
   right: 0;
   bottom: 0;
   border-radius: 5px;
-  background: linear-gradient(180deg, #a9dcff 0%, #3d9bff 100%);
+  background: linear-gradient(180deg, #b5f0ea 0%, #2fb5c4 100%);
   transition: height 0.4s ease;
 }
-.nc-fill.is-heavy { background: linear-gradient(180deg, #8fb2ff 0%, #4157ff 100%); }
+.nc-fill.is-heavy { background: linear-gradient(180deg, #7fd8e6 0%, #1679a8 100%); }
 
 .nc-label {
   height: 16px;
@@ -659,7 +665,7 @@ button { cursor: pointer; }
 .chart-dot { fill: #fff; }
 .chart-label { fill: #fff; font-size: 11px; font-weight: 600; font-family: var(--font); }
 .chart-label.is-min { fill: rgba(255, 255, 255, 0.8); }
-.chart-rain { fill: rgba(124, 199, 255, 0.35); }
+.chart-rain { fill: rgba(139, 224, 242, 0.35); }
 
 /* ------------------------------------------------------------------ */
 /* 4f. 7-Tage-Vorhersage                                               */
@@ -814,7 +820,7 @@ button { cursor: pointer; }
   padding: 10px 16px;
   border-radius: 999px;
   border: 1px solid var(--glass-border);
-  background: rgba(20, 28, 42, 0.82);
+  background: rgba(8, 36, 42, 0.86);
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
