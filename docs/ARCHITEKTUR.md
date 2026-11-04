@@ -35,11 +35,15 @@ js/api.js         Abruf Open-Meteo (Vorhersage + Ortssuche) + Reverse-Geocoding
 js/favorites.js   Favoriten + zuletzt gewählter Ort (localStorage)
 js/nowcast.js     „Regen in ca. X Minuten“ aus 15-Minuten-Daten
 js/radar.js       Radarkarte (Leaflet + RainViewer), Animation, Zeitangaben
+js/effects.js     Dezente Wetteranimation im Hintergrund (Canvas #wx-effects)
 js/app.js         Klebstoff: Ereignisse, Rendern aller Bereiche, Start
 ```
 
 Reihenfolge in `index.html` (am Ende von `<body>`):
-leaflet.js (unpkg, mit `defer` NICHT nötig) → codes.js → api.js → favorites.js → nowcast.js → radar.js → app.js
+leaflet.js (unpkg, mit `defer` NICHT nötig) → codes.js → api.js → favorites.js → nowcast.js → radar.js → effects.js → app.js
+
+`effects.js` muss **vor** `app.js` stehen, damit `Wetter.effects` beim ersten
+Rendern schon existiert. Fehlt es, läuft die App ohne Animation weiter.
 
 **Leaflet kann fehlen** (offline/blockiert). `radar.js` muss das abfangen
 (`typeof L === "undefined"`) und stattdessen im Radarbereich einen Hinweis
@@ -150,14 +154,40 @@ Für die **Anzeige** zählt die Ortszeit des Wetterorts, nicht die des Geräts:
   Seite, wenn der letzte erfolgreiche Abruf älter als 5 Minuten ist.
 - `invalidateSize()` – nach Layoutwechsel (Drehen des Geräts) aufrufen.
 
+### `Wetter.effects`
+- `update({ code, isDay, windSpeed, windDir, precip })` – Animation passend zum
+  aktuellen Wetter wählen. `code` = WMO-Code, `isDay` = Tag/Nacht,
+  `windSpeed` in km/h, `windDir` in Grad (woher), `precip` = aktueller
+  Niederschlag in **mm/h** (optional; `app.js` rechnet `current.precip` –
+  mm pro 15 min – mal 4 um).
+- Zeichnet auf das Canvas `#wx-effects` (fest hinter allen Inhalten,
+  `pointer-events: none`). Pausiert bei unsichtbarer Seite, zeigt bei
+  „Bewegung reduzieren“ nur ein Standbild. Wirft nie einen Fehler.
+- Solange `update()` nie aufgerufen wurde, richtet es sich nach den
+  `wx-*`/`is-night`-Klassen am `body`.
+
+### `app.js` – Aktualisierung und Statuszeile (intern, zur Orientierung)
+- Neu laden alle 15 Min. (nur bei sichtbarer Seite), beim Zurückkehren in den
+  Tab (Daten älter als 2 Min.) und bei `online`. Ist noch nichts angezeigt
+  (erstes Laden gescheitert), wird der gewünschte Ort nachgeladen. Während
+  einer GPS-Ortung startet keine Hintergrund-Aktualisierung.
+- Jede Minute (ein einziges Intervall, nur bei sichtbarer Seite) werden
+  Nowcast und Detailkacheln mit den vorhandenen Daten neu gezeichnet, damit
+  „Regen in ca. X Min.“ und „Untergang in …“ nicht veralten.
+- `#status` hat einen „Besitzer“ (z. B. `"locate"` oder `"load:<lat>,<lon>"`).
+  Eine Hintergrund-Aktualisierung blendet nur ihre eigene Meldung aus und
+  überschreibt keine fremde (z. B. „Bestimme Standort …“).
+
 ## DOM-IDs in `index.html`
 
 ```
-body                      Klassen: wx-<group> (z. B. wx-rain) und is-night
+body                      Klassen: wx-<group> (z. B. wx-rain), is-night, is-loading (während des Ladens)
+canvas#wx-effects         Hintergrundanimation (erstes Kind von body, aria-hidden, gezeichnet von effects.js)
 #app                      Grid-Container
   aside#sidebar
-    form#search-form > input#search-input (type=search)
-    ul#search-results
+    form#search-form > input#search-input (type=search, role=combobox, aria-controls=search-results,
+                           aria-autocomplete=list, aria-expanded / aria-activedescendant setzt app.js)
+    ul#search-results     (role=listbox; Treffer: li.search-result[role=option][id=search-option-N])
     button#locate-btn     „📍 Mein Standort“
     h3  „Favoriten“
     ul#favorites-list     (li > button.fav-item[data-id] + button.fav-remove)
@@ -169,7 +199,8 @@ body                      Klassen: wx-<group> (z. B. wx-rain) und is-night
     section#nowcast
       p#nowcast-text, div#nowcast-bars   (12 Balken à 15 Min)
     section#hourly
-      div#hourly-chart (SVG-Temperaturkurve), div#hourly-strip (horizontal scrollbar)
+      div#hourly-chart (SVG-Temperaturkurve), div#hourly-strip (horizontal scrollbar,
+                       role=list, Einträge div.hour[role=listitem])
   section#side
     section#daily  > ul#daily-list
     section#radar  > div#radar-map, div.radar-controls > button#radar-play,
@@ -184,6 +215,9 @@ p#footer  Quellenangaben (Open-Meteo, RainViewer, OpenStreetMap)
   Sidebar ~260 px | Hauptbereich (flexibel) | rechte Spalte ~380 px.
   Alles passt möglichst ohne Seiten-Scroll in 1180×820 (iPad Air) /
   1366×1024 (iPad Pro 12,9″); innerhalb der Spalten darf gescrollt werden.
+  Bei 1024–1179 px (z. B. iPad mini quer, 1024×768) ist die Mittelspalte nur
+  gut 400 px breit: Dort stehen 3 statt 4 Detailkacheln pro Reihe, die
+  Mittelspalte darf in sich scrollen.
 - **iPad hoch / kleinere Breiten (700–1023 px):** 2 Spalten, Sidebar oben als Leiste.
 - **iPhone hoch (< 700 px):** 1 Spalte, Reihenfolge: Suche/Favoriten (einklappbar)
   → Aktuell → Nowcast → Stündlich → 7 Tage → Radar.
@@ -192,3 +226,9 @@ p#footer  Quellenangaben (Open-Meteo, RainViewer, OpenStreetMap)
   weiße Schrift, große dünne Temperatur, abgerundete Ecken (16–20 px).
 - Safe Areas beachten (`env(safe-area-inset-*)`, `viewport-fit=cover`).
 - Touch-Ziele mind. 44 px.
+- Kontrast: Kleine Texte direkt auf dem Verlauf („Stand …“, Fußzeile) liegen auf
+  einer dunklen, halbtransparenten Fläche (`--scrim`), damit sie auch auf den
+  hellsten Verläufen (Schnee/Nebel am Tag) mind. 4,5 : 1 erreichen.
+- Keine `opacity`/`filter` auf Vorfahren von Glas-Kacheln (z. B. `#main`):
+  Das schaltet deren `backdrop-filter` ab. Die Ladeanzeige (`body.is-loading`)
+  blendet deshalb nur die Texte in den Kacheln ab.

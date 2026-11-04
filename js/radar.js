@@ -26,10 +26,16 @@
  *   2. Von RainViewer holen wir eine Liste von Radarbildern („Frames“):
  *      gemessene Bilder der Vergangenheit (radar.past) und – falls vorhanden –
  *      eine Kurzprognose (radar.nowcast). Jedes Frame hat {time, path}.
- *   3. Für jedes Frame legen wir eine eigene Kachel-Ebene (L.tileLayer) an,
- *      zunächst unsichtbar (opacity 0). So lädt der Browser alle Bilder vor.
- *   4. Zum Anzeigen machen wir genau eine Ebene sichtbar (opacity 0.75).
- *      Die Animation schaltet einfach reihum die Sichtbarkeit um.
+ *   3. Für jedes Frame legen wir eine eigene Kachel-Ebene (L.tileLayer) an
+ *      und merken sie uns (Cache). Auf der Karte liegen aber höchstens ZWEI
+ *      davon: das angezeigte Frame (opacity 0.75) und – nur während die
+ *      Animation läuft – das nächste, unsichtbar (opacity 0) zum Vorladen.
+ *      Warum? Leaflet lädt für JEDE Ebene auf der Karte bei jedem Verschieben
+ *      und Zoomen neue Kacheln, auch für unsichtbare. Mit allen ~16 Ebenen
+ *      wären das 16× so viele Anfragen an RainViewer.
+ *   4. Die Animation schaltet reihum weiter: Das vorgeladene Frame wird
+ *      sichtbar, das alte von der Karte genommen und das übernächste zum
+ *      Vorladen hinzugefügt.
  *
  * Klassisches Skript (kein import/export): Alles hängt an window.Wetter.
  */
@@ -83,7 +89,7 @@ window.Wetter = window.Wetter || {};
     els: {}, // gefundene DOM-Elemente
     host: "", // RainViewer-Server, z. B. "https://tilecache.rainviewer.com"
     frames: [], // [{ time: Sekunden, path, isForecast }]
-    layers: new Map(), // path → { layer, loaded } (Kachel-Ebene je Frame)
+    layers: new Map(), // path → { layer, loaded, onMap } (Kachel-Ebene je Frame, Cache)
     index: -1, // aktuell angezeigtes Frame
     lastPastIndex: -1, // letztes gemessenes Frame (Startposition)
     playing: false,
@@ -193,14 +199,68 @@ window.Wetter = window.Wetter || {};
     return frame ? state.layers.get(frame.path) : null;
   }
 
-  /** Frame Nummer i sichtbar machen, alle anderen unsichtbar. */
+  /** Nummer des Frames, das in der Animation nach Frame i kommt (am Ende: 0). */
+  function nextIndex(i) {
+    return i + 1 >= state.frames.length ? 0 : i + 1;
+  }
+
+  /** Ebene auf die Karte legen (falls noch nicht dort). */
+  function addEntry(entry) {
+    if (entry.onMap || !state.map) return;
+    entry.onMap = true;
+    entry.loaded = false;
+    entry.sawLoading = false;
+    entry.layer.addTo(state.map);
+    // Leaflet meldet „loading“ sofort beim Hinzufügen, wenn Kacheln zu laden
+    // sind. Wurde die Ebene früher mitten im Laden entfernt, meldet Leaflet
+    // das nicht noch einmal, sagt es aber über isLoading(). Lädt laut beiden
+    // nichts (z. B. Karte gerade ohne Größe), gibt es auch nichts abzuwarten –
+    // dann gilt die Ebene als fertig, damit die Animation nicht hängt.
+    const busy =
+      entry.sawLoading ||
+      (typeof entry.layer.isLoading === "function" && entry.layer.isLoading());
+    if (!busy) entry.loaded = true;
+  }
+
+  /** Ebene von der Karte nehmen. Das Objekt bleibt im Cache für später. */
+  function removeEntry(entry) {
+    if (!entry.onMap) return;
+    entry.onMap = false;
+    entry.loaded = false;
+    if (state.map) state.map.removeLayer(entry.layer);
+  }
+
+  /**
+   * Dafür sorgen, dass genau die richtigen Ebenen auf der Karte liegen:
+   * das angezeigte Frame (sichtbar) und – nur wenn die Animation läuft – das
+   * nächste (unsichtbar, lädt schon vor). Alle anderen kommen von der Karte;
+   * so lädt Leaflet beim Verschieben/Zoomen nur noch für höchstens 2 Ebenen
+   * Kacheln. Steht die Animation, reicht die eine angezeigte Ebene.
+   */
+  function syncLayers() {
+    const wanted = new Map(); // Ebenen-Eintrag → gewünschte Deckkraft
+    const cur = entryFor(state.index);
+    if (cur) wanted.set(cur, CONFIG.radarOpacity);
+    if (state.playing && state.frames.length > 1) {
+      const next = entryFor(nextIndex(state.index));
+      if (next && !wanted.has(next)) wanted.set(next, 0);
+    }
+    // Zuerst nicht mehr benötigte Ebenen entfernen …
+    state.layers.forEach((entry) => {
+      if (!wanted.has(entry)) removeEntry(entry);
+    });
+    // … dann die gewünschten hinzufügen bzw. Deckkraft setzen.
+    wanted.forEach((opacity, entry) => {
+      entry.layer.setOpacity(opacity);
+      addEntry(entry);
+    });
+  }
+
+  /** Frame Nummer i anzeigen (Ebene sichtbar), Zeitlabel und Slider setzen. */
   function showFrame(i) {
     if (i < 0 || i >= state.frames.length) return;
-    const old = entryFor(state.index);
-    if (old && state.index !== i) old.layer.setOpacity(0);
     state.index = i;
-    const cur = entryFor(i);
-    if (cur) cur.layer.setOpacity(CONFIG.radarOpacity);
+    syncLayers();
 
     const label = frameLabel(state.frames[i]);
     if (state.els.time) state.els.time.textContent = label;
@@ -224,7 +284,7 @@ window.Wetter = window.Wetter || {};
   function step() {
     if (!state.playing || state.frames.length === 0) return;
     // Nach dem letzten Bild geht es wieder vorne los.
-    const next = state.index + 1 >= state.frames.length ? 0 : state.index + 1;
+    const next = nextIndex(state.index);
 
     // Lädt das nächste Bild noch? Dann kurz warten statt ein leeres Bild
     // zu zeigen (das würde flackern). Nach ein paar Versuchen trotzdem
@@ -246,6 +306,7 @@ window.Wetter = window.Wetter || {};
     state.playing = true;
     state.waits = 0;
     updatePlayButton();
+    syncLayers(); // nächstes Frame schon jetzt zum Vorladen auf die Karte
     // Steht man gerade am Ende, nach der Pause von vorn beginnen.
     schedule(state.index >= state.frames.length - 1 ? CONFIG.endPause / 2 : CONFIG.frameDelay);
   }
@@ -255,6 +316,7 @@ window.Wetter = window.Wetter || {};
     clearTimeout(state.timer);
     state.timer = null;
     updatePlayButton();
+    syncLayers(); // ohne Animation braucht es keine vorgeladene Ebene
   }
 
   function togglePlay() {
@@ -312,7 +374,11 @@ window.Wetter = window.Wetter || {};
     };
   }
 
-  /** Kachel-Ebene für ein Frame anlegen (unsichtbar, lädt aber schon). */
+  /**
+   * Kachel-Ebene für ein Frame anlegen – nur das Objekt, noch NICHT auf der
+   * Karte (dann lädt es auch nichts). Auf die Karte kommt es erst über
+   * syncLayers, wenn es angezeigt oder vorgeladen werden soll.
+   */
   function createLayer(frame) {
     const layer = L.tileLayer(state.host + frame.path + CONFIG.radarTileSuffix, {
       opacity: 0,
@@ -322,12 +388,14 @@ window.Wetter = window.Wetter || {};
       maxZoom: CONFIG.maxZoom,
       attribution: CONFIG.radarAttribution,
     });
-    const entry = { layer: layer, loaded: false };
+    const entry = { layer: layer, loaded: false, onMap: false, sawLoading: false };
     // „loading“: Leaflet beginnt Kacheln zu laden (auch nach Verschieben der Karte),
     // „load“: alle sichtbaren Kacheln dieser Ebene sind da.
-    layer.on("loading", () => (entry.loaded = false));
+    layer.on("loading", () => {
+      entry.loaded = false;
+      entry.sawLoading = true;
+    });
     layer.on("load", () => (entry.loaded = true));
-    layer.addTo(state.map);
     return entry;
   }
 
@@ -373,23 +441,23 @@ window.Wetter = window.Wetter || {};
 
     // Hat sich der Server geändert, alle alten Ebenen verwerfen.
     if (parsed.host !== state.host) {
-      state.layers.forEach((e) => state.map.removeLayer(e.layer));
+      state.layers.forEach(removeEntry);
       state.layers.clear();
     }
     state.host = parsed.host;
 
-    // Nicht mehr benötigte Ebenen entfernen, neue anlegen.
+    // Nicht mehr benötigte Ebenen entfernen, neue anlegen (noch nicht auf die
+    // Karte – das erledigt showFrame unten über syncLayers).
     const neededPaths = new Set(parsed.frames.map((f) => f.path));
     state.layers.forEach((entry, path) => {
       if (!neededPaths.has(path)) {
-        state.map.removeLayer(entry.layer);
+        removeEntry(entry);
         state.layers.delete(path);
       }
     });
     state.frames = parsed.frames;
     state.frames.forEach((f) => {
       if (!state.layers.has(f.path)) state.layers.set(f.path, createLayer(f));
-      else state.layers.get(f.path).layer.setOpacity(0);
     });
 
     // Startposition: letztes GEMESSENES Bild (nicht die Prognose).

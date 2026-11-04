@@ -48,6 +48,7 @@ window.Wetter = window.Wetter || {};
   const SEARCH_DEBOUNCE_MS = 300;           // Wartezeit nach dem Tippen
   const REFRESH_INTERVAL_MS = 15 * 60 * 1000;   // alle 15 Minuten neu laden
   const REFRESH_ON_RETURN_MS = 2 * 60 * 1000;   // beim Zurückkehren: nur wenn älter als 2 Min.
+  const TICK_MS = 60 * 1000;                // jede Minute „jetzt“-abhängige Texte auffrischen
   const HOURS_SHOWN = 24;                   // Stunden in der Stundenleiste
   const HOUR_W = 56;                        // Breite einer Stundenspalte in px (wie im CSS)
 
@@ -68,9 +69,11 @@ window.Wetter = window.Wetter || {};
     searchTimer: null,    // Timer für das „Debounce“ der Suche
     searchResults: [],    // letzte Treffer der Suche …
     searchQuery: "",      // … und der Suchbegriff, zu dem sie gehören
+    searchActive: -1,     // per Pfeiltaste markierter Treffer (-1 = keiner)
     locateSeq: 0,         // Zähler für die GPS-Ortung (jede andere Ortswahl erhöht ihn)
     locateActive: 0,      // Nummer der Ortung, die gerade läuft (0 = keine)
     radarReady: false,    // wurde Wetter.radar.init erfolgreich aufgerufen?
+    statusOwner: null,    // wem gehört die Meldung in #status gerade? (siehe showLoading)
   };
 
   /* ================================================================== */
@@ -279,9 +282,31 @@ window.Wetter = window.Wetter || {};
   /* Statusanzeige (Laden / Fehler) in #status                            */
   /* ================================================================== */
 
-  function showLoading(text) {
+  /*
+   * Es gibt nur EINE Statuszeile, aber mehrere „Absender“: das Laden der
+   * Wetterdaten, die GPS-Ortung, kleine Hinweise … Damit ein Absender nicht
+   * versehentlich die Meldung eines anderen wegräumt (Beispiel: eine
+   * Hintergrund-Aktualisierung blendet „Bestimme Standort …“ aus), merken wir
+   * uns, wem die Meldung gerade gehört („Besitzer“, ein kurzer Text wie
+   * "locate" oder "load:52.52,13.405").
+   * hideStatus(owner) räumt dann nur auf, wenn die Meldung diesem Besitzer gehört.
+   */
+
+  /** Ist gerade eine Meldung zu sehen, die einem ANDEREN Besitzer gehört? */
+  function statusBusyByOther(owner) {
+    const box = $("status");
+    return !!box && !box.hidden && state.statusOwner !== owner;
+  }
+
+  /**
+   * Lade-Meldung mit drehendem Symbol anzeigen.
+   * @param {string} text
+   * @param {string} [owner] Besitzer der Meldung (siehe oben)
+   */
+  function showLoading(text, owner) {
     const box = $("status");
     if (!box) return;
+    state.statusOwner = owner || null;
     box.classList.remove("is-error");
     clear(box);
     box.append(el("span", "spinner"), el("span", "status-text", text || "Lade Wetterdaten …"));
@@ -291,10 +316,12 @@ window.Wetter = window.Wetter || {};
   /**
    * Fehlermeldung anzeigen. Wird retry übergeben, gibt es einen Knopf
    * „Erneut versuchen“, der diese Funktion aufruft.
+   * @param {string} [owner] Besitzer der Meldung (siehe oben)
    */
-  function showError(message, retry) {
+  function showError(message, retry, owner) {
     const box = $("status");
     if (!box) return;
+    state.statusOwner = owner || null;
     box.classList.add("is-error");
     clear(box);
     box.append(el("span", "status-text", "⚠️ " + (message || "Unbekannter Fehler")));
@@ -310,7 +337,8 @@ window.Wetter = window.Wetter || {};
       const close = el("button", "status-close", "✕");
       close.type = "button";
       close.setAttribute("aria-label", "Meldung schließen");
-      close.addEventListener("click", hideStatus);
+      // Pfeilfunktion, damit das Klick-Ereignis NICHT als „owner“ übergeben wird
+      close.addEventListener("click", () => hideStatus());
       box.append(close);
     } else {
       // Meldungen ohne Knopf verschwinden nach ein paar Sekunden von selbst
@@ -322,9 +350,16 @@ window.Wetter = window.Wetter || {};
     box.hidden = false;
   }
 
-  function hideStatus() {
+  /**
+   * Meldung ausblenden.
+   * @param {string} [owner] Nur ausblenden, wenn die Meldung diesem Besitzer
+   *   gehört. Ohne Angabe wird immer ausgeblendet (z. B. Knopf ✕).
+   */
+  function hideStatus(owner) {
     const box = $("status");
     if (!box) return;
+    if (owner !== undefined && state.statusOwner !== owner) return;   // fremde Meldung → stehen lassen
+    state.statusOwner = null;
     box.hidden = true;
     box.classList.remove("is-error");
     clear(box);
@@ -354,12 +389,17 @@ window.Wetter = window.Wetter || {};
     state.loading = true;
     state.pendingPlace = place;
 
+    // Besitzer-Kennung für die Statuszeile: gehört zu GENAU diesem Ort.
+    // So räumt ein erfolgreiches Laden nur die eigene Lade- bzw. eine ältere
+    // Fehlermeldung zu diesem Ort weg – nie z. B. „Bestimme Standort …“.
+    const owner = "load:" + place.lat + "," + place.lon;
+
     // Beim allerersten Laden gibt es noch keinen alten Ort – dann zeigt die
     // Kopfzeile schon den gewünschten Ort (siehe renderPlaceHeader).
     if (!state.place) renderPlaceHeader();
 
     if (!opts.silent) {
-      showLoading("Lade Wetter für " + (place.name || "Ort") + " …");
+      showLoading("Lade Wetter für " + (place.name || "Ort") + " …", owner);
       document.body.classList.add("is-loading");
     }
 
@@ -386,7 +426,7 @@ window.Wetter = window.Wetter || {};
 
       renderAll();          // enthält auch die Kopfzeile mit Stern
       renderFavorites();    // markiert den aktuellen Ort in der Favoritenliste
-      hideStatus();
+      hideStatus(owner);    // nur die EIGENE Meldung ausblenden (siehe Statusanzeige)
 
       // Radar: Bei neuem Ort Karte zentrieren + Marker setzen, sonst nur die
       // Zeitzone auffrischen (die Karte springt dann nicht zurück, falls der
@@ -399,8 +439,11 @@ window.Wetter = window.Wetter || {};
       if (seq !== state.loadSeq) return;
       console.warn("Laden fehlgeschlagen:", err);
       const msg = (err && err.message) || "Die Wetterdaten konnten nicht geladen werden.";
+      // Eine Hintergrund-Aktualisierung drängt sich nicht vor: Steht gerade
+      // eine andere Meldung da (z. B. ein GPS-Fehler), bleibt diese stehen.
+      if (opts.silent && statusBusyByOther(owner)) return;
       // „Erneut versuchen“ lädt den GEWÜNSCHTEN Ort (nicht den angezeigten).
-      showError(msg, () => loadPlace(place));
+      showError(msg, () => loadPlace(place), owner);
     } finally {
       if (seq === state.loadSeq) {
         state.loading = false;
@@ -410,14 +453,22 @@ window.Wetter = window.Wetter || {};
   }
 
   /**
-   * Aktuellen Ort im Hintergrund neu laden (Auto-Aktualisierung).
-   * Läuft gerade schon ein Ladevorgang (z. B. der Nutzer hat eben einen neuen
-   * Ort gewählt), tun wir nichts – sonst würde die Aktualisierung des ALTEN
-   * Orts den neuen Ladevorgang verdrängen.
+   * Aktuellen Ort im Hintergrund neu laden (Auto-Aktualisierung: alle
+   * 15 Minuten, beim Zurückkehren in den Tab, wenn das Netz wieder da ist).
+   *
+   * - Läuft gerade schon ein Ladevorgang (z. B. der Nutzer hat eben einen
+   *   neuen Ort gewählt), tun wir nichts – sonst würde die Aktualisierung des
+   *   ALTEN Orts den neuen Ladevorgang verdrängen.
+   * - Läuft gerade eine GPS-Ortung, ebenfalls nichts: Gleich kommt ohnehin ein
+   *   neuer Ort, und die Meldung „Bestimme Standort …“ soll stehen bleiben.
+   * - Ist noch GAR NICHTS angezeigt (das allererste Laden ist gescheitert,
+   *   z. B. offline gestartet), laden wir den gewünschten Ort nach – diesmal
+   *   mit Ladeanzeige, denn es gibt ja noch keine Daten auf dem Bildschirm.
    */
   function refresh() {
-    if (state.loading) return;
+    if (state.loading || state.locateActive) return;
     if (state.place) loadPlace(state.place, { silent: true });
+    else if (state.pendingPlace) loadPlace(state.pendingPlace);
   }
 
   /**
@@ -476,9 +527,9 @@ window.Wetter = window.Wetter || {};
     // Hintergrund-Animation (Regen, Schnee, Sterne …) mit den echten Daten füttern.
     // Open-Meteo liefert den aktuellen Niederschlag als Summe der letzten
     // 15 Minuten – mal 4 ergibt ungefähr mm pro Stunde.
-    if (Wetter.effects) {
+    if (W.effects && typeof W.effects.update === "function") {
       try {
-        Wetter.effects.update({
+        W.effects.update({
           code: cur.code, isDay: cur.isDay, windSpeed: cur.wind, windDir: cur.windDir,
           precip: typeof cur.precip === "number" ? cur.precip * 4 : null,
         });
@@ -645,8 +696,9 @@ window.Wetter = window.Wetter || {};
 
     let setSub = "";
     if (set) {
-      const now = toDate(cur.time) || new Date();
-      const untilSet = set - now;
+      // „Jetzt“ ist die echte Uhrzeit – NICHT der Zeitstempel der Daten.
+      // So stimmt „in 2 h 10 min“ auch zwischen zwei Abrufen (siehe tick()).
+      const untilSet = set - Date.now();
       setSub = untilSet > 0 ? "in " + fmtDuration(untilSet) : "Schon vorbei";
     }
     tiles.push(tile("🌇 Untergang", set ? fmtClock(set) : DASH, "", setSub));
@@ -658,7 +710,16 @@ window.Wetter = window.Wetter || {};
 
   function renderNowcast() {
     const data = state.data || {};
-    const minutely = Array.isArray(data.minutely) ? data.minutely.slice(0, 12) : [];
+    // Abschnitte, die schon ganz vorbei sind, lassen wir weg (ein Eintrag
+    // deckt 15 Minuten ab seiner Zeit ab). Wichtig, weil diese Funktion auch
+    // zwischen zwei Abrufen jede Minute neu gezeichnet wird (siehe tick()).
+    const nowMs = Date.now();
+    const minutely = (Array.isArray(data.minutely) ? data.minutely : [])
+      .filter((entry) => {
+        const t = entry && toDate(entry.time);
+        return !t || t.getTime() + 15 * 60 * 1000 > nowMs;
+      })
+      .slice(0, 12);
     const textBox = $("nowcast-text");
     const bars = $("nowcast-bars");
 
@@ -751,9 +812,11 @@ window.Wetter = window.Wetter || {};
     const cols = hours.map((h, i) => {
       h = h || {};
       const col = el("div", "hour" + (i === 0 ? " is-now" : ""));
+      col.setAttribute("role", "listitem");   // #hourly-strip ist eine Liste (role="list")
       const d = describe(h.code, h.isDay);
+      const timeText = i === 0 ? "Jetzt" : fmtHour(h.time);
 
-      col.append(el("span", "hour-time", i === 0 ? "Jetzt" : fmtHour(h.time)));
+      col.append(el("span", "hour-time", timeText));
       col.append(el("span", "hour-icon", d.emoji || DASH));
 
       const prob = el("span", "hour-prob", isNum(h.precipProb) ? Math.round(h.precipProb) + " %" : DASH);
@@ -761,11 +824,19 @@ window.Wetter = window.Wetter || {};
       col.append(prob);
 
       col.append(el("span", "hour-temp", fmtTemp(h.temp)));
-      col.title = d.text + (isNum(h.precipProb) ? ", Regenwahrscheinlichkeit " + Math.round(h.precipProb) + " %" : "");
+      const rainText = isNum(h.precipProb) ? ", Regenwahrscheinlichkeit " + Math.round(h.precipProb) + " %" : "";
+      col.title = d.text + rainText;
+      // Vorlesetext: „14 Uhr: Bewölkt, Regenwahrscheinlichkeit 20 %, 12°“
+      // (die Einzelteile – Emoji, „20 %“ – wären allein schwer verständlich)
+      col.setAttribute("aria-label", timeText + ": " + d.text + rainText + ", " + fmtTemp(h.temp));
       return col;
     });
 
-    if (!cols.length) cols.push(el("p", "search-info", "Keine Stundenwerte verfügbar"));
+    if (!cols.length) {
+      const info = el("p", "search-info", "Keine Stundenwerte verfügbar");
+      info.setAttribute("role", "listitem");
+      cols.push(info);
+    }
     strip.replaceChildren(...cols);
   }
 
@@ -1081,22 +1152,49 @@ window.Wetter = window.Wetter || {};
   /* Ortssuche                                                            */
   /* ================================================================== */
 
+  /*
+   * Barrierefreiheit der Suche („Combobox“-Muster):
+   *   - Das Suchfeld hat role="combobox" und steuert die Liste #search-results
+   *     (role="listbox"), jeder Treffer ist ein <li role="option">.
+   *   - Der Tastatur-Fokus BLEIBT im Suchfeld. Mit den Pfeiltasten wird nur ein
+   *     Treffer „markiert“: Das Suchfeld zeigt über aria-activedescendant auf
+   *     dessen id, damit Screenreader ihn vorlesen. Enter übernimmt ihn.
+   *   - aria-expanded sagt, ob gerade Treffer zu sehen sind.
+   */
+
+  /** Markierten Treffer setzen (-1 = keiner) und Screenreadern mitteilen */
+  function setActiveResult(index) {
+    const input = $("search-input");
+    const options = Array.from(document.querySelectorAll("#search-results .search-result"));
+    state.searchActive = index >= 0 && index < options.length ? index : -1;
+    options.forEach((opt, i) => {
+      const active = i === state.searchActive;
+      opt.classList.toggle("is-active", active);
+      opt.setAttribute("aria-selected", String(active));
+      if (active) opt.scrollIntoView({ block: "nearest" });
+    });
+    if (!input) return;
+    if (state.searchActive >= 0) input.setAttribute("aria-activedescendant", options[state.searchActive].id);
+    else input.removeAttribute("aria-activedescendant");
+  }
+
   function closeResults() {
     const ul = $("search-results");
     if (!ul) return;
     ul.hidden = true;
     clear(ul);
-    state.searchResults = [];
-    state.searchQuery = "";
-    const input = $("search-input");
-    if (input) input.setAttribute("aria-expanded", "false");
+    forgetResults();
   }
 
   /** Einen Info-Text in der Trefferliste zeigen („Suche …“, „Nichts gefunden“) */
   function showSearchInfo(text) {
     const ul = $("search-results");
     if (!ul) return;
-    ul.replaceChildren(el("li", "search-info", text));
+    // Kein auswählbarer Treffer → als „deaktivierte Option“ kennzeichnen
+    const li = el("li", "search-info", text);
+    li.setAttribute("role", "option");
+    li.setAttribute("aria-disabled", "true");
+    ul.replaceChildren(li);
     ul.hidden = false;
   }
 
@@ -1107,8 +1205,12 @@ window.Wetter = window.Wetter || {};
   function forgetResults() {
     state.searchResults = [];
     state.searchQuery = "";
+    state.searchActive = -1;
     const input = $("search-input");
-    if (input) input.setAttribute("aria-expanded", "false");
+    if (input) {
+      input.setAttribute("aria-expanded", "false");
+      input.removeAttribute("aria-activedescendant");
+    }
   }
 
   /** Eingabe im Suchfeld: erst 300 ms Ruhe abwarten („Debounce“), dann suchen */
@@ -1163,21 +1265,22 @@ window.Wetter = window.Wetter || {};
       showSearchInfo("Keine Orte gefunden.");
       return;
     }
+    // Jeder Treffer ist ein <li role="option"> mit eigener id (für
+    // aria-activedescendant). Angeklickt/angetippt wird er über onResultsClick.
     const items = results.map((place, i) => {
-      const li = el("li");
-      li.setAttribute("role", "presentation");
-      const btn = el("button", "search-result");
-      btn.type = "button";
-      btn.setAttribute("role", "option");
-      btn.dataset.index = String(i);
-      btn.append(el("span", "search-result-name", place.name || DASH));
+      const li = el("li", "search-result");
+      li.id = "search-option-" + i;
+      li.setAttribute("role", "option");
+      li.setAttribute("aria-selected", "false");
+      li.dataset.index = String(i);
+      li.append(el("span", "search-result-name", place.name || DASH));
       const sub = placeSub(place);
-      if (sub) btn.append(el("span", "search-result-sub", sub));
-      li.append(btn);
+      if (sub) li.append(el("span", "search-result-sub", sub));
       return li;
     });
     ul.replaceChildren(...items);
     ul.hidden = false;
+    state.searchActive = -1;
     $("search-input").setAttribute("aria-expanded", "true");
   }
 
@@ -1209,29 +1312,31 @@ window.Wetter = window.Wetter || {};
     event.preventDefault();      // Seite nicht neu laden!
     const query = $("search-input").value.trim();
     if (state.searchResults.length && state.searchQuery === query) {
-      choosePlace(state.searchResults[0]);
+      // per Pfeiltaste markierter Treffer – sonst der erste
+      choosePlace(state.searchResults[Math.max(state.searchActive, 0)]);
     } else if (query.length >= 2) {
       clearTimeout(state.searchTimer);
       runSearch(query);
     }
   }
 
-  /** Tastatur: Escape schließt, Pfeiltasten wandern durch die Treffer */
+  /**
+   * Tastatur: Escape schließt, Pfeiltasten markieren Treffer.
+   * Der Fokus bleibt dabei im Suchfeld (siehe setActiveResult).
+   */
   function onSearchKeydown(event) {
-    const buttons = Array.from(document.querySelectorAll("#search-results .search-result"));
-    const index = buttons.indexOf(document.activeElement);
+    const count = document.querySelectorAll("#search-results .search-result").length;
 
     if (event.key === "Escape") {
       event.preventDefault();
       closeResults();
       $("search-input").focus();
-    } else if (event.key === "ArrowDown" && buttons.length) {
+    } else if (event.key === "ArrowDown" && count) {
       event.preventDefault();
-      buttons[Math.min(index + 1, buttons.length - 1)].focus();
-    } else if (event.key === "ArrowUp" && buttons.length) {
+      setActiveResult(Math.min(state.searchActive + 1, count - 1));
+    } else if (event.key === "ArrowUp" && count) {
       event.preventDefault();
-      if (index <= 0) $("search-input").focus();
-      else buttons[index - 1].focus();
+      setActiveResult(state.searchActive - 1);   // über den ersten hinaus → keiner markiert
     }
   }
 
@@ -1323,7 +1428,7 @@ window.Wetter = window.Wetter || {};
     // 3. Knopf sperren, solange die Ortung läuft (WLAN/externes GPS kann dauern)
     btn.disabled = true;
     btn.textContent = "📍 Orte …";
-    showLoading("Bestimme Standort …");
+    showLoading("Bestimme Standort …", "locate");
 
     // Knopf zurücksetzen – aber nur, wenn nicht schon eine NEUERE Ortung läuft
     const done = () => {
@@ -1361,7 +1466,7 @@ window.Wetter = window.Wetter || {};
       (err) => {
         done();
         // Fehlermeldung nur, wenn diese Ortung noch gefragt ist
-        if (isCurrent()) showError(geoErrorText(err), onLocate);
+        if (isCurrent()) showError(geoErrorText(err), onLocate, "locate");
       },
       {
         enableHighAccuracy: true,   // externes GPS bzw. beste WLAN-Ortung nutzen
@@ -1416,6 +1521,32 @@ window.Wetter = window.Wetter || {};
       console.warn("Radar konnte nicht gestartet werden:", err);
       const status = $("radar-status");
       if (status) status.textContent = "Radar konnte nicht gestartet werden.";
+    }
+  }
+
+  /* ================================================================== */
+  /* Minutentakt: Texte, die von „jetzt“ abhängen, aktuell halten         */
+  /* ================================================================== */
+
+  /**
+   * Neue Wetterdaten holen wir nur alle 15 Minuten. Manche Texte hängen aber
+   * von der Uhrzeit ab und würden dazwischen veralten:
+   *   - der Nowcast-Satz („Regen in ca. 30 Min.“) und seine Balken
+   *   - „Untergang in 2 h 10 min“ in den Detailkacheln
+   * Deshalb zeichnen wir diese beiden Bereiche jede Minute mit den VORHANDENEN
+   * Daten neu (kein Netzabruf). Die übrigen Bereiche bleiben unberührt –
+   * Stundenleiste (Scrollposition) und Bedienelemente (Fokus) werden also
+   * nicht neu gebaut. Die neu gebauten Kacheln und Balken sind nicht
+   * fokussierbar, und ihre Größe bleibt gleich – die Spalte springt nicht.
+   */
+  function tick() {
+    if (!state.data || document.visibilityState !== "visible") return;
+    for (const [name, fn] of [["Nowcast", renderNowcast], ["Details", renderDetails]]) {
+      try {
+        fn();
+      } catch (err) {
+        console.warn("Fehler beim Auffrischen von „" + name + "“:", err);
+      }
     }
   }
 
@@ -1476,12 +1607,12 @@ window.Wetter = window.Wetter || {};
     window.addEventListener("resize", onResize);
     window.addEventListener("orientationchange", onResize);
 
-    // Zurück in den Tab (oder App aus dem Hintergrund) → aktualisieren,
-    // wenn die Daten älter als 2 Minuten sind
+    // Zurück in den Tab (oder App aus dem Hintergrund) → Uhrzeit-Texte sofort
+    // auffrischen und neu laden, wenn die Daten älter als 2 Minuten sind
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible" && Date.now() - state.lastLoadedAt > REFRESH_ON_RETURN_MS) {
-        refresh();
-      }
+      if (document.visibilityState !== "visible") return;
+      tick();
+      if (Date.now() - state.lastLoadedAt > REFRESH_ON_RETURN_MS) refresh();
     });
 
     // Wieder online → neu laden
@@ -1491,6 +1622,11 @@ window.Wetter = window.Wetter || {};
     setInterval(() => {
       if (document.visibilityState === "visible") refresh();
     }, REFRESH_INTERVAL_MS);
+
+    // Jede Minute Nowcast-Satz und „Untergang in …“ auffrischen. Es gibt
+    // genau EIN solches Intervall (bindEvents läuft nur einmal beim Start);
+    // tick() selbst tut nichts, solange die Seite unsichtbar ist.
+    setInterval(tick, TICK_MS);
   }
 
   function start() {

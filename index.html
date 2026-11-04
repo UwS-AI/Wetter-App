@@ -63,10 +63,13 @@
         <!-- Suchformular: role="search" hilft Screenreadern -->
         <form id="search-form" role="search" autocomplete="off">
           <label class="visually-hidden" for="search-input">Ort suchen</label>
+          <!-- role="combobox": Suchfeld mit aufklappender Trefferliste.
+               aria-expanded / aria-activedescendant setzt app.js. -->
           <input id="search-input" type="search" placeholder="Stadt oder Ort suchen"
                  enterkeyhint="search" autocapitalize="words" spellcheck="false"
+                 role="combobox" aria-expanded="false"
                  aria-controls="search-results" aria-autocomplete="list">
-          <!-- Trefferliste, wird von app.js gefüllt -->
+          <!-- Trefferliste, wird von app.js gefüllt (Treffer = li role="option") -->
           <ul id="search-results" class="search-results" role="listbox"
               aria-label="Suchergebnisse" hidden></ul>
         </form>
@@ -114,8 +117,10 @@
         <h3 id="hourly-title" class="card-title">🕐 Stündliche Vorhersage</h3>
         <!-- Temperaturkurve (SVG, von app.js gezeichnet) -->
         <div id="hourly-chart" class="hourly-chart" aria-hidden="true"></div>
-        <!-- Stundenleiste – seitlich wischbar -->
-        <div id="hourly-strip" class="hourly-strip" tabindex="0"
+        <!-- Stundenleiste – seitlich wischbar. role="list": Screenreader
+             erfahren, dass es eine Liste von Stunden ist (Einträge: role="listitem").
+             tabindex="0": per Tastatur erreichbar und mit Pfeiltasten scrollbar. -->
+        <div id="hourly-strip" class="hourly-strip" tabindex="0" role="list"
              aria-label="Stündliche Vorhersage, seitlich scrollbar"></div>
       </section>
     </main>

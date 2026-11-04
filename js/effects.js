@@ -29,7 +29,18 @@
  * aufgerufen wurde, gelten nur noch dessen (genauere) Angaben.
  *
  * Rücksicht auf Akku und Nutzer:
- *   - höchstens ~30 Bilder pro Sekunde (requestAnimationFrame + Drosselung)
+ *   - Bildrate je Szene: Regen/Schnee/Hagel ~30 Bilder pro Sekunde, ruhige
+ *     Szenen (Sonne, Sterne, Wolken, Nebel) nur ~10 – dort bewegt sich ohnehin
+ *     kaum etwas. Jedes neue Canvas-Bild zwingt den Browser außerdem, alle
+ *     Glas-Kacheln darüber (backdrop-filter: blur) neu zu verwischen.
+ *   - Weiche Ebenen (Sonnenglühen, Wolkenschleier, Sterne) werden EINMAL in
+ *     kleine unsichtbare Canvas-Flächen vorgezeichnet („vorrendern“) und pro
+ *     Bild nur noch gestempelt (drawImage + globalAlpha).
+ *   - Ruhige Szenen ohne feine Linien/Punkte zeichnen mit normaler statt
+ *     Retina-Auflösung (4× weniger Pixel) – weiche Verläufe sehen gleich aus.
+ *   - Ändert sich nur die Höhe ein wenig (Safari-Leiste beim Scrollen auf dem
+ *     iPhone), bleibt die Szene stehen; nur bei neuer Breite (Drehen) wird
+ *     sie neu aufgebaut.
  *   - Anzahl der Teilchen hängt von der Bildschirmfläche ab und ist begrenzt
  *   - Pause, solange der Tab/die App im Hintergrund ist (document.hidden)
  *   - „Bewegung reduzieren“ (prefers-reduced-motion) → nur ein ruhiges
@@ -48,8 +59,26 @@ window.Wetter = window.Wetter || {};
   // Einstellungen (zum Ausprobieren gut geeignet)
   // ------------------------------------------------------------------
 
-  /** Mindestabstand zwischen zwei Bildern in ms (1000 / 30 ≈ 33 → max. 30 fps) */
-  const FRAME_MS = 1000 / 30;
+  /**
+   * Mindestabstand zwischen zwei Bildern in ms.
+   * FAST: fallende Teilchen (Regen, Schnee, Hagel) und Blitze → max. 30 fps
+   * CALM: nur ruhige Ebenen (Sonne, Sterne, Wolken, Nebel)    → max. 10 fps
+   *       (Wolken ziehen höchstens 20 px pro Sekunde – bei 10 Bildern pro
+   *       Sekunde sind das 2 px je Bild, bei so weichen Flecken unsichtbar.)
+   */
+  const FRAME_MS_FAST = 1000 / 30;
+  const FRAME_MS_CALM = 1000 / 10;
+
+  /**
+   * Ändert sich nur die Höhe um weniger als so viele Pixel (Breite gleich),
+   * bauen wir die Szene NICHT neu auf. Typischer Fall: Auf dem iPhone blendet
+   * Safari beim Scrollen seine Adressleiste ein/aus (ca. 50–120 px).
+   */
+  const HEIGHT_TOLERANCE = 150;
+
+  /** Auflösung der vorgezeichneten weichen Ebenen (Anteil der CSS-Pixel) */
+  const SUN_LAYER_SCALE = 0.25;    // Sonnenglühen: sehr weicher Verlauf
+  const CLOUD_LAYER_SCALE = 0.5;   // Wolkenschleier
 
   /** Bezugsfläche für die Teilchenzahl: iPad Air quer (1180 × 820) */
   const REF_AREA = 1180 * 820;
@@ -94,14 +123,18 @@ window.Wetter = window.Wetter || {};
   let ctx = null;        // sein 2D-Zeichenkontext
   let W = 0, H = 0;      // Größe in CSS-Pixeln
   let dpr = 1;           // Pixeldichte (Retina = 2), höchstens 2
+  let scale = 1;         // tatsächliche Zeichen-Auflösung: dpr oder 1 (ruhige, weiche Szene)
 
   let params = null;     // aktuelle Wetterangaben { group, code, isDay, ... }
   let paramsKey = "";    // dieselben Angaben als Text – zum schnellen Vergleichen
   let scene = null;      // alle Teilchen/Ebenen der aktuellen Szene
   let clock = 0;         // eigene Uhr in Sekunden (läuft in Pausen nicht weiter)
   let frames = 0;        // Anzahl gezeichneter Bilder (nur für Tests/Diagnose)
+  let builds = 0;        // wie oft die Szene neu aufgebaut wurde (Tests/Diagnose)
+  let builtW = 0, builtH = 0;  // Größe, für die die aktuelle Szene gebaut wurde
 
   let rafId = 0;         // Nummer des angeforderten Animationsbilds (0 = keins)
+  let timerId = 0;       // Wartezeit vor dem nächsten Bild in ruhigen Szenen (setTimeout)
   let lastTs = 0;        // Zeitstempel des letzten gezeichneten Bilds
 
   let reducedMotion = false;
@@ -112,6 +145,7 @@ window.Wetter = window.Wetter || {};
   let pending = null;        // update()-Angaben, die vor init() kamen
 
   let sprite = null;     // vorgezeichneter weicher Lichtfleck (für Wolken, Nebel, Flocken)
+  let starSprite = null; // vorgezeichneter kleiner, scharfer Punkt (für Sterne)
 
   // ------------------------------------------------------------------
   // Kleine Hilfsfunktionen
@@ -180,6 +214,40 @@ window.Wetter = window.Wetter || {};
     return c;
   }
 
+  /**
+   * Ein kleiner weißer Punkt mit glattem Rand – unser „Stern-Stempel“.
+   * STAR_SPRITE_R = Radius des Punkts im Stempel (in Stempel-Pixeln).
+   * Er wird beim Zeichnen auf die Sterngröße verkleinert.
+   */
+  const STAR_SPRITE_SIZE = 16;
+  const STAR_SPRITE_R = 7;
+  function makeStarSprite() {
+    const c = document.createElement("canvas");
+    c.width = c.height = STAR_SPRITE_SIZE;
+    const g = c.getContext("2d");
+    if (!g) return null;
+    g.fillStyle = "#ffffff";
+    g.beginPath();
+    g.arc(STAR_SPRITE_SIZE / 2, STAR_SPRITE_SIZE / 2, STAR_SPRITE_R, 0, Math.PI * 2);
+    g.fill();
+    return c;
+  }
+
+  /**
+   * Eine neue unsichtbare Zeichenfläche („Offscreen-Canvas“) für eine
+   * vorgezeichnete Ebene. w/h in CSS-Pixeln, k = Auflösung (0,25 = ein Viertel).
+   * Liefert { c: Canvas, g: Zeichenkontext } oder null.
+   */
+  function makeLayer(w, h, k) {
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.ceil(w * k));
+    c.height = Math.max(1, Math.ceil(h * k));
+    const g = c.getContext("2d");
+    if (!g) return null;
+    g.setTransform(k, 0, 0, k, 0, 0);   // ab jetzt in CSS-Pixeln zeichnen
+    return { c, g };
+  }
+
   // ------------------------------------------------------------------
   // Szene aufbauen: aus den Wetterangaben werden Teilchen und Ebenen
   // ------------------------------------------------------------------
@@ -190,6 +258,9 @@ window.Wetter = window.Wetter || {};
    */
   function buildScene() {
     if (!params || !W || !H) { scene = null; return; }
+    builds++;
+    builtW = W;
+    builtH = H;
 
     const p = params;
     const code = p.code;
@@ -216,6 +287,7 @@ window.Wetter = window.Wetter || {};
 
     const s = {
       sun: 0,          // Stärke des Sonnenglühens (0 = keins)
+      sunLayer: null,  // vorgezeichnetes Sonnenglühen (Offscreen-Canvas)
       stars: [],
       clouds: [],
       fog: [],
@@ -276,7 +348,68 @@ window.Wetter = window.Wetter || {};
       addFlakes(s, rnd, n, s.grains, night);
     }
 
+    // --- Weiche Ebenen einmal vorzeichnen ------------------------------
+    if (s.sun) s.sunLayer = renderSunLayer(s.sun);
+    for (const c of s.clouds) renderCloudLayer(c);
+
+    // Ruhige Szene ohne feine Striche/Punkte (keine Sterne, kein Niederschlag)?
+    // Dann reicht normale Auflösung: Weiche Verläufe sehen auch mit 1× scharf
+    // genug aus, und es sind auf Retina-Bildschirmen 4× weniger Pixel.
+    s.soft = !s.stars.length && !s.drops.length && !s.flakes.length && !s.hail.length;
+
     scene = s;
+  }
+
+  /**
+   * Sonnenglühen EINMAL vorzeichnen: ein großer, weicher Farbverlauf oben
+   * rechts. Früher wurde er bei jedem Bild neu berechnet – das kostet bei
+   * Bildschirmgröße sehr viel. Jetzt zeichnen wir ihn in geringer Auflösung
+   * (ein Viertel) auf eine unsichtbare Fläche; beim Stempeln vergrößert der
+   * Browser ihn weich, was man bei einem so sanften Verlauf nicht sieht.
+   * Die Fläche ist HEIGHT_TOLERANCE höher als der Bildschirm, damit auch nach
+   * einer kleinen Höhenänderung (ohne Neuaufbau) unten nichts fehlt.
+   */
+  function renderSunLayer(strength) {
+    const lh = H + HEIGHT_TOLERANCE;
+    const layer = makeLayer(W, lh, SUN_LAYER_SCALE);
+    if (!layer) return null;
+    const cx = W * 0.9;
+    const cy = H * 0.03;
+    const R = Math.max(W, H) * 0.55;
+    const a = 0.4 * strength;          // volle Stärke; das Pulsieren macht später globalAlpha
+    const grad = layer.g.createRadialGradient(cx, cy, 0, cx, cy, R);
+    grad.addColorStop(0, "rgba(" + RGB_SUN + "," + a.toFixed(3) + ")");
+    grad.addColorStop(0.18, "rgba(" + RGB_SUN + "," + (a * 0.55).toFixed(3) + ")");
+    grad.addColorStop(0.5, "rgba(" + RGB_SUN + "," + (a * 0.15).toFixed(3) + ")");
+    grad.addColorStop(1, "rgba(" + RGB_SUN + ",0)");
+    layer.g.fillStyle = grad;
+    layer.g.fillRect(0, 0, W, lh);
+    return { c: layer.c, w: W, h: lh };
+  }
+
+  /**
+   * Eine Wolke EINMAL vorzeichnen: alle ihre Flecken („Puffs“) auf eine kleine
+   * unsichtbare Fläche. Danach ist jede Wolke pro Bild nur noch EIN drawImage
+   * statt 3–5. Wir zeichnen die Flecken gleich mit der Wolken-Durchsichtigkeit
+   * (alpha), damit Überlappungen genauso aussehen wie vorher.
+   */
+  function renderCloudLayer(c) {
+    if (!sprite) return;
+    // Umriss (Bounding Box) aller Flecken relativ zur Wolkenmitte bestimmen
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of c.puffs) {
+      x0 = Math.min(x0, p.dx - p.rx); x1 = Math.max(x1, p.dx + p.rx);
+      y0 = Math.min(y0, p.dy - p.ry); y1 = Math.max(y1, p.dy + p.ry);
+    }
+    const layer = makeLayer(x1 - x0, y1 - y0, CLOUD_LAYER_SCALE);
+    if (!layer) return;
+    layer.g.globalAlpha = c.alpha;
+    for (const p of c.puffs) {
+      layer.g.drawImage(sprite, p.dx - p.rx - x0, p.dy - p.ry - y0, p.rx * 2, p.ry * 2);
+    }
+    c.layer = layer.c;
+    c.ox = x0; c.oy = y0;                  // Versatz der Fläche zur Wolkenmitte
+    c.lw = x1 - x0; c.lh = y1 - y0;        // Größe in CSS-Pixeln
   }
 
   /** Sterne: feste Positionen in den oberen 60 % des Bildschirms */
@@ -415,7 +548,7 @@ window.Wetter = window.Wetter || {};
    *          (Sonne, Sterne, Wolken, Nebel), kein Regen/Schnee/Blitz
    */
   function drawFrame(dt, still) {
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
     ctx.globalAlpha = 1;
     ctx.clearRect(0, 0, W, H);
     if (!scene) return;
@@ -423,7 +556,7 @@ window.Wetter = window.Wetter || {};
     if (!still) clock += dt;
     const s = scene;
 
-    if (s.sun) drawSun(s.sun, still);
+    if (s.sunLayer) drawSun(s.sunLayer, still);
     if (s.stars.length) drawStars(s.stars, still);
     if (s.clouds.length) drawClouds(s.clouds, dt, still);
     if (s.fog.length) drawFog(s.fog, still);
@@ -438,38 +571,41 @@ window.Wetter = window.Wetter || {};
     frames++;
   }
 
-  /** Sanftes, langsam pulsierendes Sonnenglühen oben rechts */
-  function drawSun(strength, still) {
-    // Puls: alle ~9 Sekunden einmal etwas heller und wieder dunkler
+  /**
+   * Sanftes, langsam pulsierendes Sonnenglühen oben rechts.
+   * Der Verlauf ist vorgezeichnet (renderSunLayer) – hier wird er nur noch
+   * gestempelt. Das Pulsieren (alle ~9 Sekunden etwas heller und wieder
+   * dunkler) erledigt globalAlpha: Alle Farbstopps werden gleichmäßig
+   * schwächer, genau wie vorher, als die Stärke in den Verlauf eingerechnet war.
+   */
+  function drawSun(layer, still) {
     const pulse = still ? 1 : 0.88 + 0.12 * Math.sin((clock * 2 * Math.PI) / 9);
-    const cx = W * 0.9;
-    const cy = H * 0.03;
-    const R = Math.max(W, H) * 0.55 * (0.97 + 0.03 * pulse);
-    const a = 0.4 * strength * pulse;
-    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
-    grad.addColorStop(0, "rgba(" + RGB_SUN + "," + a.toFixed(3) + ")");
-    grad.addColorStop(0.18, "rgba(" + RGB_SUN + "," + (a * 0.55).toFixed(3) + ")");
-    grad.addColorStop(0.5, "rgba(" + RGB_SUN + "," + (a * 0.15).toFixed(3) + ")");
-    grad.addColorStop(1, "rgba(" + RGB_SUN + ",0)");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = pulse;
+    ctx.drawImage(layer.c, 0, 0, layer.w, layer.h);
   }
 
-  /** Sterne: kleine Punkte, manche funkeln leicht */
+  /**
+   * Sterne: kleine Punkte, manche funkeln leicht. Jeder Stern ist ein
+   * gestempelter, vorgezeichneter Punkt (starSprite) – schneller als für jeden
+   * Stern einen Kreis-Pfad zu bauen. Die Helligkeit kommt über globalAlpha.
+   */
   function drawStars(stars, still) {
-    ctx.fillStyle = "#ffffff";
+    if (!starSprite) return;
+    // Der Punkt im Stempel hat den Radius STAR_SPRITE_R von STAR_SPRITE_SIZE/2
+    // → Stempel so groß zeichnen, dass der Punkt den Sternradius r bekommt.
+    const k = STAR_SPRITE_SIZE / STAR_SPRITE_R;
     for (const st of stars) {
       const tw = still ? 0 : st.tw * (0.5 + 0.5 * Math.sin(clock * st.f + st.ph));
       ctx.globalAlpha = st.a * (1 - tw);
-      ctx.beginPath();
-      ctx.arc(st.x, st.y, st.r, 0, Math.PI * 2);
-      ctx.fill();
+      const d = st.r * k;
+      ctx.drawImage(starSprite, st.x - d / 2, st.y - d / 2, d, d);
     }
   }
 
-  /** Wolkenschleier zeichnen und langsam weiterschieben */
+  /** Wolkenschleier: vorgezeichnete Wolken stempeln und langsam weiterschieben */
   function drawClouds(clouds, dt, still) {
-    if (!sprite) return;
+    // Die Durchsichtigkeit steckt schon in der vorgezeichneten Fläche
+    ctx.globalAlpha = 1;
     for (const c of clouds) {
       if (!still) {
         c.x += c.vx * dt;
@@ -478,10 +614,7 @@ window.Wetter = window.Wetter || {};
         if (c.vx > 0 && c.x - half > W) c.x = -half;
         if (c.vx < 0 && c.x + half < 0) c.x = W + half;
       }
-      ctx.globalAlpha = c.alpha;
-      for (const p of c.puffs) {
-        ctx.drawImage(sprite, c.x + p.dx - p.rx, c.y + p.dy - p.ry, p.rx * 2, p.ry * 2);
-      }
+      if (c.layer) ctx.drawImage(c.layer, c.x + c.ox, c.y + c.oy, c.lw, c.lh);
     }
   }
 
@@ -635,7 +768,7 @@ window.Wetter = window.Wetter || {};
   }
 
   // ------------------------------------------------------------------
-  // Animationsschleife: Start, Stopp, Drosselung auf ~30 fps
+  // Animationsschleife: Start, Stopp, Drosselung (30 bzw. 10 fps)
   // ------------------------------------------------------------------
 
   /** Darf gerade animiert werden? */
@@ -643,36 +776,72 @@ window.Wetter = window.Wetter || {};
     return !!scene && !reducedMotion && !document.hidden;
   }
 
+  /**
+   * Gewünschter Abstand zwischen zwei Bildern für die aktuelle Szene:
+   * schnell (30 fps), wenn etwas fällt oder gerade ein Blitz leuchtet,
+   * sonst ruhig (10 fps).
+   */
+  function frameInterval() {
+    const s = scene;
+    if (s && (s.drops.length || s.flakes.length || s.hail.length || s.flash)) return FRAME_MS_FAST;
+    return FRAME_MS_CALM;
+  }
+
   function tick(ts) {
-    rafId = requestAnimationFrame(tick);
+    rafId = 0;
     try {
       if (!lastTs) {           // erstes Bild nach (Neu-)Start
         lastTs = ts;
         drawFrame(0, false);
-        return;
+      } else {
+        const elapsed = ts - lastTs;
+        // Drosselung: erst zeichnen, wenn genug Zeit vergangen ist.
+        // (Die 2 ms Toleranz verhindern, dass bei 60 Hz jedes 3. statt 2. Bild kommt.)
+        if (elapsed >= frameInterval() - 2) {
+          lastTs = ts;
+          // dt begrenzen: nach einem Ruckler springen die Teilchen nicht weit
+          drawFrame(Math.min(elapsed / 1000, 0.25), false);
+        }
       }
-      const elapsed = ts - lastTs;
-      // Drosselung: Bilder überspringen, bis ~33 ms vergangen sind.
-      // (Die 2 ms Toleranz verhindern, dass bei 60 Hz jedes 3. statt 2. Bild kommt.)
-      if (elapsed < FRAME_MS - 2) return;
-      lastTs = ts;
-      // dt begrenzen: nach einem Ruckler springen die Teilchen nicht weit
-      drawFrame(Math.min(elapsed / 1000, 0.1), false);
+      scheduleNext();
     } catch (e) {
       // Sollte beim Zeichnen etwas schiefgehen: still aufhören statt Fehlerflut
       stop();
     }
   }
 
+  /**
+   * Nächstes Bild bestellen. Bei 30 fps fragen wir einfach bei jedem
+   * Bildschirm-Takt (requestAnimationFrame) nach. In ruhigen Szenen (10 fps)
+   * wäre das Verschwendung – das Skript würde 60× pro Sekunde geweckt, nur um
+   * meistens nichts zu tun. Dort warten wir mit setTimeout, bis das nächste
+   * Bild fast fällig ist, und bestellen erst dann den Bildschirm-Takt.
+   */
+  function scheduleNext() {
+    if (!canAnimate()) return;
+    const now = (window.performance && performance.now) ? performance.now() : Date.now();
+    const wait = frameInterval() - (now - lastTs);
+    if (wait > 50) {
+      timerId = setTimeout(() => {
+        timerId = 0;
+        if (canAnimate()) rafId = requestAnimationFrame(tick);
+      }, wait - 10);
+    } else {
+      rafId = requestAnimationFrame(tick);
+    }
+  }
+
   function start() {
-    if (rafId || !canAnimate()) return;
+    if (rafId || timerId || !canAnimate()) return;
     lastTs = 0;
     rafId = requestAnimationFrame(tick);
   }
 
   function stop() {
     if (rafId) cancelAnimationFrame(rafId);
+    if (timerId) clearTimeout(timerId);
     rafId = 0;
+    timerId = 0;
   }
 
   /**
@@ -696,6 +865,30 @@ window.Wetter = window.Wetter || {};
   // Größe des Canvas an den Bildschirm anpassen
   // ------------------------------------------------------------------
 
+  /**
+   * Zeichenfläche (echte Pixel) an Größe und Auflösung anpassen.
+   * Das Canvas bekommt „echte“ Pixel (CSS-Größe × Auflösung), damit es auf
+   * Retina-Bildschirmen scharf ist. Gezeichnet wird weiter in CSS-Pixeln
+   * (setTransform in drawFrame skaliert automatisch).
+   * Ruhige, weiche Szenen kommen mit Auflösung 1 aus (siehe buildScene).
+   * Liefert true, wenn sich etwas geändert hat. Achtung: Jede Änderung von
+   * canvas.width/height löscht den Inhalt – danach sofort neu zeichnen!
+   */
+  function applyCanvasSize() {
+    scale = scene && scene.soft ? Math.min(dpr, 1) : dpr;
+    const cw = Math.max(1, Math.round(W * scale));
+    const ch = Math.max(1, Math.round(H * scale));
+    if (canvas.width === cw && canvas.height === ch) return false;
+    canvas.width = cw;
+    canvas.height = ch;
+    return true;
+  }
+
+  /** Nach einer Änderung der Zeichenfläche sofort ein Bild malen (kein Leerbild). */
+  function redrawNow() {
+    if (ctx && scene && !document.hidden) drawFrame(0, reducedMotion);
+  }
+
   function resize() {
     if (!canvas || !ctx) return;
     const rect = canvas.getBoundingClientRect();
@@ -703,14 +896,44 @@ window.Wetter = window.Wetter || {};
     const h = Math.round(rect.height || window.innerHeight || 0);
     const ratio = Math.min(window.devicePixelRatio || 1, 2);
     if (w === W && h === H && ratio === dpr) return;
+
+    // Nur die Höhe hat sich ein wenig geändert (Breite und Pixeldichte gleich)?
+    // Das passiert auf dem iPhone ständig: Safari blendet beim Scrollen seine
+    // Leiste ein und aus. Dann behalten wir die Szene – sonst würden Wolken
+    // springen und kurz ein leeres Bild erscheinen. Wir vergleichen mit der
+    // Höhe beim letzten Aufbau, damit sich viele kleine Änderungen nicht
+    // unbemerkt zu einer großen aufsummieren.
+    const onlyHeight = scene && w === W && ratio === dpr &&
+      w === builtW && Math.abs(h - builtH) < HEIGHT_TOLERANCE;
+
+    const oldH = H;
     W = w; H = h; dpr = ratio;
-    // Das Canvas bekommt „echte“ Pixel (CSS-Größe × Pixeldichte), damit es auf
-    // Retina-Bildschirmen scharf ist. Gezeichnet wird weiter in CSS-Pixeln
-    // (setTransform in drawFrame skaliert automatisch).
-    canvas.width = Math.max(1, Math.round(W * dpr));
-    canvas.height = Math.max(1, Math.round(H * dpr));
+
+    if (onlyHeight) {
+      if (H < oldH) clampToHeight(scene);
+      applyCanvasSize();
+      redrawNow();      // gleiche Szene sofort wieder zeigen (Größenänderung hat gelöscht)
+      refresh();
+      return;
+    }
+
     buildScene();     // Positionen hängen von der Größe ab → neu aufbauen
+    applyCanvasSize();
+    redrawNow();
     refresh();
+  }
+
+  /**
+   * Nach dem Schrumpfen der Höhe: Teilchen, die jetzt unterhalb des Bildes
+   * liegen, auf eine zufällige Höhe im sichtbaren Bereich verteilen. (Sonst
+   * würden sie alle gleichzeitig oben neu starten – eine sichtbare „Welle“.)
+   */
+  function clampToHeight(s) {
+    for (const d of s.drops) if (d.y - d.len > H) d.y = Math.random() * H;
+    for (const f of s.flakes) if (f.y - f.r > H) f.y = Math.random() * H;
+    for (const h of s.hail) {
+      if (h.y > H) { h.y = Math.random() * H; h.bounced = false; h.vx = 0; h.vy = between(Math.random, 950, 1250); }
+    }
   }
 
   let resizeQueued = false;
@@ -735,6 +958,9 @@ window.Wetter = window.Wetter || {};
     params = next;
     paramsKey = key;
     buildScene();
+    // Ruhige/bewegte Szene kann eine andere Auflösung brauchen → ggf. anpassen
+    // und dann sofort zeichnen, damit kein leeres Bild aufblitzt.
+    if (canvas && applyCanvasSize()) redrawNow();
     refresh();
   }
 
@@ -799,10 +1025,12 @@ window.Wetter = window.Wetter || {};
       group: params ? params.group : null,
       code: params ? params.code : null,
       isDay: params ? params.isDay : null,
-      running: !!rafId,
+      running: !!(rafId || timerId),
       reducedMotion,
       frames,
-      size: { w: W, h: H, dpr },
+      builds,
+      fps: scene ? Math.round(1000 / frameInterval()) : 0,
+      size: { w: W, h: H, dpr, scale },
       counts: {
         drops: s.drops.length, flakes: s.flakes.length, hail: s.hail.length,
         stars: s.stars.length, clouds: s.clouds.length, fog: s.fog.length,
@@ -821,6 +1049,7 @@ window.Wetter = window.Wetter || {};
       ctx = canvas.getContext("2d");
       if (!ctx) return;
       sprite = makeSprite();
+      starSprite = makeStarSprite();
 
       // „Bewegung reduzieren“ beachten – und auf Änderungen reagieren
       if (window.matchMedia) {

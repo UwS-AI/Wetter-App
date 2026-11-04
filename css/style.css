@@ -30,6 +30,12 @@
   --text: #fff;
   --text-dim: rgba(255, 255, 255, 0.72);
   --text-faint: rgba(255, 255, 255, 0.5);
+  /* Kleine Zusatzangaben direkt auf dem Farbverlauf („Stand …“, Fußzeile).
+     Auf hellen Verläufen (Schnee, Nebel am Tag) wäre selbst reines Weiß zu
+     schwach – deshalb liegt darunter eine dunkle, halbtransparente Fläche
+     („Scrim“). Zusammen ergibt das mind. 4,5 : 1 Kontrast (WCAG AA). */
+  --text-meta: rgba(255, 255, 255, 0.9);
+  --scrim: rgba(3, 32, 38, 0.55);
   --line: rgba(255, 255, 255, 0.16);
   --rain: #8be0f2;           /* Farbe für Regen-Angaben (helles Türkis) */
   --accent: #e9c46a;         /* Akzent: Sonnengelb (Stern, Hervorhebungen) */
@@ -132,6 +138,7 @@ body.is-night {
   --glass: rgba(255, 255, 255, 0.07);
   --glass-strong: rgba(255, 255, 255, 0.12);
   --glass-border: rgba(255, 255, 255, 0.12);
+  --scrim: rgba(0, 0, 0, 0.25);   /* nachts reicht ein Hauch – der Verlauf ist dunkel */
 }
 body.is-night .temp-bar { background: rgba(255, 255, 255, 0.12); }
 
@@ -238,14 +245,22 @@ button { cursor: pointer; }
   min-width: 0;
 }
 
+/* Fußzeile: kleine, mittige „Plakette“ mit dunklem Scrim dahinter, damit die
+   Quellenangaben auch auf hellen Verläufen gut lesbar sind (siehe --scrim). */
 .footer {
-  margin: 0;
-  padding: 10px var(--pad-right) var(--pad-bottom) var(--pad-left);
+  width: fit-content;
+  max-width: calc(100% - var(--pad-left) - var(--pad-right));
+  margin: 10px auto var(--pad-bottom);
+  padding: 3px 12px;
+  border-radius: 12px;
+  background: var(--scrim);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
   font-size: 11px;
-  color: var(--text-faint);
+  color: var(--text-meta);
   text-align: center;
 }
-.footer a { color: var(--text-dim); }
+.footer a { color: var(--text); }
 
 /* ------------------------------------------------------------------ */
 /* 4b. Sidebar: Suche, Standort, Favoriten                             */
@@ -320,10 +335,13 @@ button { cursor: pointer; }
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
 }
 
+/* Ein Treffer (li role="option"). cursor: pointer ist auf iOS nötig, damit
+   ein Tipp auf ein <li> überhaupt ein click-Ereignis auslöst. */
 .search-result {
   display: block;
   width: 100%;
   min-height: 44px;
+  cursor: pointer;
   padding: 7px 10px;
   border: 0;
   border-radius: 8px;
@@ -333,6 +351,8 @@ button { cursor: pointer; }
 .search-result:hover,
 .search-result:focus-visible,
 .search-result.is-active { background: rgba(255, 255, 255, 0.14); outline: none; }
+/* per Pfeiltaste markierter Treffer: zusätzlich ein Rahmen (nicht nur Farbe) */
+.search-result.is-active { box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.6); }
 .search-result-name { display: block; font-weight: 600; }
 .search-result-sub { display: block; font-size: 13px; color: var(--text-dim); }
 
@@ -494,12 +514,18 @@ button { cursor: pointer; }
   font-weight: 500;
 }
 
+/* „Stand 14:30 Uhr (Ortszeit)“ als kleine Plakette mit Scrim (Kontrast!) */
 .current-updated {
-  margin: 4px 0 0;
+  display: inline-block;
+  margin: 5px 0 0;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: var(--scrim);
   font-size: 12px;
-  color: var(--text-faint);
-  min-height: 1.35em;
+  color: var(--text-meta);
+  min-height: 1.35em;   /* hält den Platz frei, auch solange noch nichts drinsteht */
 }
+.current-updated:empty { background: transparent; }
 
 /* Detailkacheln: Raster mit 4 Spalten (iPhone: 2 Spalten, siehe unten) */
 .details-grid {
@@ -530,8 +556,11 @@ button { cursor: pointer; }
 
 .tile-value {
   display: flex;
+  flex-wrap: wrap;      /* wird es zu eng, rutscht die Einheit in die nächste Zeile … */
   align-items: center;
-  gap: 6px;
+  column-gap: 6px;
+  row-gap: 0;
+  min-width: 0;         /* … statt über den Kachelrand hinauszuragen */
   font-size: 22px;
   font-weight: 500;
   line-height: 1.2;
@@ -869,9 +898,21 @@ button { cursor: pointer; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Während des Ladens den Inhalt leicht abdunkeln (Klasse von app.js) */
-body.is-loading #main,
-body.is-loading #daily { opacity: 0.75; transition: opacity 0.3s; }
+/* Während des Ladens die TEXTE leicht abblenden (Klasse von app.js).
+   Achtung: opacity (oder filter) auf einem VORFAHREN einer Glas-Kachel
+   (z. B. #main) würde deren backdrop-filter abschalten – die Kacheln wären
+   kurz nicht mehr „gläsern“. Deshalb trifft es nur die Inhalte IN den
+   Kacheln bzw. die Kopfzeile, die selbst keine Glas-Kacheln enthält. */
+.current-head,
+.detail-tile > *,
+#nowcast > *,
+#hourly > *,
+#daily > * { transition: opacity 0.3s; }
+body.is-loading .current-head,
+body.is-loading .detail-tile > *,
+body.is-loading #nowcast > *,
+body.is-loading #hourly > *,
+body.is-loading #daily > * { opacity: 0.6; }
 
 /* Wer Animationen in den Systemeinstellungen reduziert hat, bekommt keine */
 @media (prefers-reduced-motion: reduce) {
@@ -962,7 +1003,8 @@ body.is-loading #daily { opacity: 0.75; transition: opacity 0.3s; }
     align-items: stretch;
   }
 
-  .footer { padding-top: 6px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+  /* Fußzeile: knapp halten, damit für die Spalten möglichst viel Höhe bleibt */
+  .footer { margin-top: 4px; margin-bottom: max(6px, env(safe-area-inset-bottom)); padding: 1px 12px; }
 
   /* Jede Spalte scrollt bei Bedarf für sich */
   #sidebar, #main, #side {
@@ -1017,6 +1059,15 @@ body.is-loading #daily { opacity: 0.75; transition: opacity 0.3s; }
   .card-title { margin-bottom: 6px; padding-bottom: 6px; }
   .nowcast-text { margin-bottom: 8px; }
   .nc-track { height: 38px; }
+}
+
+/* Kleines iPad quer (z. B. iPad mini 1024 × 768, 1024–1179 px breit):
+   Die Mittelspalte ist hier nur gut 400 px breit. Vier Kacheln pro Reihe
+   wären ~95 px schmal – Beschriftungen und Werte würden abgeschnitten.
+   Deshalb nur drei Kacheln pro Reihe (eine Reihe mehr; die Mittelspalte
+   darf bei Bedarf in sich scrollen, die Seite selbst scrollt nicht). */
+@media (min-width: 1024px) and (max-width: 1179px) and (orientation: landscape) {
+  .details-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 /* Großes iPad quer (z. B. 1366 × 1024): mehr Luft und größere Schrift */
