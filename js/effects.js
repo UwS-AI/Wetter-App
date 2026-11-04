@@ -236,7 +236,11 @@ window.Wetter = window.Wetter || {};
   /**
    * Eine neue unsichtbare Zeichenfläche („Offscreen-Canvas“) für eine
    * vorgezeichnete Ebene. w/h in CSS-Pixeln, k = Auflösung (0,25 = ein Viertel).
-   * Liefert { c: Canvas, g: Zeichenkontext } oder null.
+   * Liefert { c: Canvas, g: Zeichenkontext, w, h } oder null.
+   * Die Fläche hat ganze Pixel und ist deshalb oft ein klein wenig größer als
+   * gewünscht: w/h im Ergebnis sind ihre GENAUE Größe in CSS-Pixeln. Genau so
+   * groß muss sie später auch gestempelt werden – sonst wird sie minimal
+   * gestaucht, und am Rand entsteht ein dunkler Streifen.
    */
   function makeLayer(w, h, k) {
     const c = document.createElement("canvas");
@@ -245,7 +249,7 @@ window.Wetter = window.Wetter || {};
     const g = c.getContext("2d");
     if (!g) return null;
     g.setTransform(k, 0, 0, k, 0, 0);   // ab jetzt in CSS-Pixeln zeichnen
-    return { c, g };
+    return { c, g, w: c.width / k, h: c.height / k };
   }
 
   // ------------------------------------------------------------------
@@ -383,8 +387,8 @@ window.Wetter = window.Wetter || {};
     grad.addColorStop(0.5, "rgba(" + RGB_SUN + "," + (a * 0.15).toFixed(3) + ")");
     grad.addColorStop(1, "rgba(" + RGB_SUN + ",0)");
     layer.g.fillStyle = grad;
-    layer.g.fillRect(0, 0, W, lh);
-    return { c: layer.c, w: W, h: lh };
+    layer.g.fillRect(0, 0, layer.w, layer.h);   // die GANZE Fläche füllen (kein halber Randpixel)
+    return layer;
   }
 
   /**
@@ -409,7 +413,7 @@ window.Wetter = window.Wetter || {};
     }
     c.layer = layer.c;
     c.ox = x0; c.oy = y0;                  // Versatz der Fläche zur Wolkenmitte
-    c.lw = x1 - x0; c.lh = y1 - y0;        // Größe in CSS-Pixeln
+    c.lw = layer.w; c.lh = layer.h;        // genaue Größe der Fläche in CSS-Pixeln
   }
 
   /** Sterne: feste Positionen in den oberen 60 % des Bildschirms */
