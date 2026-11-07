@@ -587,7 +587,7 @@ window.Wetter = window.Wetter || {};
     }
 
     // Auch der Tab-Titel zeigt Temperatur und Ort, z. B. „12° Berlin · Wetter“
-    if (state.place) document.title = fmtTemp(cur.temp) + " " + state.place.name + " · Wetter";
+    if (state.place) document.title = fmtTemp(cur.temp) + " " + state.place.name + " · UwS Wetter";
   }
 
   /* ---------- Detailkacheln ---------- */

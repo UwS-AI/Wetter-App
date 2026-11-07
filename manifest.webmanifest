@@ -1,0 +1,17 @@
+{
+  "name": "UwS Wetter",
+  "short_name": "UwS Wetter",
+  "description": "Wetter mit Regenradar und Kurzfrist-Vorhersage – privates Projekt",
+  "lang": "de",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#06161a",
+  "theme_color": "#0f4c5c",
+  "icons": [
+    { "src": "img/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "img/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "img/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "img/logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
