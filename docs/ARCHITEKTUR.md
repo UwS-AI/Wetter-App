@@ -30,7 +30,7 @@ an die hier beschriebenen Namen, damit die Teile zusammenpassen.
 ```
 index.html        Seitenstruktur (alle IDs siehe unten)
 manifest.webmanifest  App-Name „UwS Wetter“, Farben, Symbole (Home-Bildschirm)
-img/              logo.svg (Monogramm UW in Wolke), apple-touch-icon.png (180, ohne
+img/              logo.svg (Monogramm UwS in Wolke), apple-touch-icon.png (180, ohne
                   runde Ecken), icon-192/512.png, icon-maskable-512.png, favicon-32.png
 css/style.css     Aussehen, Layout iPad quer + iPhone hoch
 js/codes.js       Wettercodes (WMO) -> Text, Emoji, Gruppe
