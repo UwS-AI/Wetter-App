@@ -55,6 +55,11 @@
   --pad-bottom: max(12px, env(safe-area-inset-bottom));
   --pad-left: max(12px, env(safe-area-inset-left));
 
+  /* Ausgleich für einen iOS-Fehler bei Home-Bildschirm-Apps: Die gemeldete
+     Fensterhöhe ist um die Statusleiste zu klein. app.js setzt den fehlenden
+     Betrag (sonst 0px), siehe applyStandaloneFix(). */
+  --standalone-fix: 0px;
+
   /* Hintergrund-Verlauf: Standard (wird je Wetter überschrieben).
      Farbfamilie „Petrol & Türkis“ – bewusst anders als das Apple-Blau. */
   --bg-top: #0f4c5c;
@@ -80,6 +85,7 @@ body {
   margin: 0;
   min-height: 100vh;
   min-height: 100dvh;   /* dvh = sichtbare Höhe (berücksichtigt Safari-Leisten) */
+  min-height: calc(100dvh + var(--standalone-fix));
   font-family: var(--font);
   color: var(--text);
   line-height: 1.35;
@@ -98,7 +104,8 @@ body {
 body::before {
   content: "";
   position: fixed;
-  inset: 0;
+  /* unten um den iOS-Ausgleich verlängert, sonst bleibt dort ein Streifen */
+  inset: 0 0 calc(-1 * var(--standalone-fix)) 0;
   z-index: -1;
   background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
   pointer-events: none;
@@ -1018,6 +1025,7 @@ body.is-loading #daily > * { opacity: 0.6; }
   body {
     height: 100vh;
     height: 100dvh;
+    height: calc(100dvh + var(--standalone-fix));   /* iOS-Ausgleich, sonst 0 */
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -1124,9 +1132,10 @@ body.is-loading #daily > * { opacity: 0.6; }
    eigenen Stapelkontext). pointer-events: none → Klicks gehen hindurch. */
 #wx-effects {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
   width: 100%;
-  height: 100%;
+  height: calc(100% + var(--standalone-fix));   /* iOS-Ausgleich, sonst 0 */
   z-index: -1;
   display: block;
   pointer-events: none;

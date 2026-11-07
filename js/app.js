@@ -540,6 +540,43 @@ window.Wetter = window.Wetter || {};
     const meta = document.querySelector('meta[name="theme-color"]');
     const top = getComputedStyle(body).getPropertyValue("--bg-top").trim();
     if (meta && top) meta.setAttribute("content", top);
+    // Seitenhintergrund (sichtbar beim „Überscrollen“) an den unteren Verlaufston anpassen
+    const bottom = getComputedStyle(body).getPropertyValue("--bg-bottom").trim();
+    if (bottom) document.documentElement.style.backgroundColor = bottom;
+  }
+
+  /**
+   * iOS-Fehler bei Home-Bildschirm-Apps ausgleichen.
+   *
+   * Mit durchsichtiger Statusleiste (black-translucent) meldet iOS die Höhe
+   * des Fensters (100vh, window.innerHeight) um die Statusleiste zu KLEIN.
+   * Folge: unten ein Streifen ohne Hintergrund, die Spalten sind zu kurz.
+   *
+   * Lösung: Nur wenn die App als Home-Bildschirm-App läuft UND die volle
+   * Bildschirmbreite nutzt (kein geteilter Bildschirm), vergleichen wir die
+   * gemeldete Höhe mit der echten Bildschirmhöhe. Die Differenz kommt in die
+   * CSS-Variable --standalone-fix, die das CSS auf die Höhe aufschlägt.
+   * Im normalen Browser bleibt sie 0 – dort ändert sich nichts.
+   */
+  function applyStandaloneFix() {
+    let fix = 0;
+    try {
+      const standalone = window.navigator.standalone === true ||
+        (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+      if (standalone && window.screen) {
+        // screen.width/height sind auf iOS oft fest im Hochformat angegeben →
+        // passend zur aktuellen Ausrichtung die längere/kürzere Seite nehmen.
+        const long = Math.max(screen.width, screen.height);
+        const short = Math.min(screen.width, screen.height);
+        const landscape = window.innerWidth > window.innerHeight;
+        const screenW = landscape ? long : short;
+        const screenH = landscape ? short : long;
+        const missing = screenH - window.innerHeight;
+        // Nur bei voller Breite und plausibler Lücke (Statusleiste ≈ 20–60 px)
+        if (Math.abs(window.innerWidth - screenW) <= 1 && missing > 0 && missing <= 60) fix = missing;
+      }
+    } catch (err) { /* im Zweifel nichts ändern */ }
+    document.documentElement.style.setProperty("--standalone-fix", fix + "px");
   }
 
   /**
@@ -1633,6 +1670,9 @@ window.Wetter = window.Wetter || {};
   }
 
   function start() {
+    applyStandaloneFix();
+    window.addEventListener("resize", applyStandaloneFix);
+    window.addEventListener("orientationchange", () => setTimeout(applyStandaloneFix, 300));
     try {
       bindEvents();
     } catch (err) {
