@@ -272,6 +272,29 @@ button { cursor: pointer; }
   z-index: 5;  /* Suchergebnisse sollen über den anderen Karten liegen */
 }
 
+/* Branding „UwS Wetter“: Logo + Name ganz oben in der Sidebar.
+   Steht AUSSERHALB von .sidebar-body → auch auf dem iPhone immer sichtbar. */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 4px 10px;
+}
+.brand-logo {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;               /* passend zu den runden Ecken im SVG */
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+.brand-name {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.brand-name-light { font-weight: 300; }   /* „Wetter“ dünner als „UwS“ */
+
 /* Auf-/Zuklapp-Knopf (nur iPhone) */
 .sidebar-toggle {
   display: flex;

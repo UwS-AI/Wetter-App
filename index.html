@@ -16,8 +16,18 @@
        Ecken) reichen. Die Abstände dafür kommen im CSS aus env(safe-area-inset-*). -->
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 
-  <title>Wetter</title>
-  <meta name="description" content="Wetter mit Regenradar und Kurzfrist-Vorhersage">
+  <title>UwS Wetter</title>
+  <meta name="description" content="UwS Wetter – Wetter mit Regenradar und Kurzfrist-Vorhersage (privates Projekt)">
+  <meta name="application-name" content="UwS Wetter">
+
+  <!-- Branding: eigenes Logo (Monogramm „UwS“ in einer Wolke) statt Browser-Standardsymbol.
+       favicon = Symbol im Browser-Tab, apple-touch-icon = Symbol auf dem Home-Bildschirm
+       (180×180, ohne runde Ecken – iOS rundet selbst ab), manifest = Name/Symbole für
+       „Zum Home-Bildschirm“ in Chrome & Co. -->
+  <link rel="icon" href="img/logo.svg" type="image/svg+xml">
+  <link rel="icon" href="img/favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+  <link rel="manifest" href="manifest.webmanifest">
 
   <!-- Farbe der Browser-Leiste (Safari). app.js passt sie ans Wetter an. -->
   <meta name="theme-color" content="#0f4c5c">
@@ -27,7 +37,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Wetter">
+  <meta name="apple-mobile-web-app-title" content="UwS Wetter">
   <!-- Telefonnummern-Erkennung aus (sonst macht Safari evtl. Zahlen zu Links) -->
   <meta name="format-detection" content="telephone=no">
 
@@ -50,6 +60,12 @@
 
     <!-- ===================== Linke Spalte: Suche & Favoriten ===================== -->
     <aside id="sidebar" aria-label="Ortssuche und Favoriten">
+
+      <!-- Branding: Logo + App-Name (auf allen Geräten sichtbar) -->
+      <div class="brand">
+        <img class="brand-logo" src="img/logo.svg" alt="" width="34" height="34">
+        <span class="brand-name">UwS <span class="brand-name-light">Wetter</span></span>
+      </div>
 
       <!-- Nur auf dem iPhone sichtbar: klappt den Bereich auf/zu -->
       <button id="sidebar-toggle" class="sidebar-toggle" type="button"
@@ -152,6 +168,7 @@
   </div>
 
   <p id="footer" class="footer">
+    <strong>UwS Wetter</strong> · privates Projekt ·
     Wetterdaten: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> ·
     Radar: <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a> ·
     Karte: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>-Mitwirkende

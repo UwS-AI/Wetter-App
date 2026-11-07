@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="UwS Wetter">
+  <!-- Logo „UwS Wetter“: Monogramm UwS in einer Wolke auf Petrol-Verlauf.
+       Die Buchstaben sind Linien (keine Schrift) → sehen überall gleich aus. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#0f4c5c"/>
+      <stop offset="1" stop-color="#2a9d8f"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <!-- Wolke aus drei Kreisen und einem abgerundeten Rechteck -->
+  <g fill="#ffffff">
+    <circle cx="190" cy="250" r="78"/>
+    <circle cx="300" cy="215" r="104"/>
+    <circle cx="380" cy="282" r="56"/>
+    <rect x="96" y="250" width="340" height="122" rx="61"/>
+  </g>
+  <!-- Monogramm „UwS“ in Petrol (großes U, kleines w, großes S) -->
+  <g fill="none" stroke="#0f4c5c" stroke-width="26" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M140 234 V290 a33 33 0 0 0 66 0 V234"/>
+    <path d="M226 268 L245 324 L270 282 L295 324 L314 268"/>
+    <path d="M390 248 C382 232 338 226 338 254 C338 280 392 274 392 300 C392 330 346 334 336 312"/>
+  </g>
+  <!-- drei Regentropfen-Striche in hellem Türkis -->
+  <g stroke="#b5f0ea" stroke-width="18" stroke-linecap="round">
+    <path d="M184 404 l-12 36"/>
+    <path d="M262 404 l-12 36"/>
+    <path d="M340 404 l-12 36"/>
+  </g>
+</svg>

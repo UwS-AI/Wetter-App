@@ -64,6 +64,11 @@ window.Wetter = window.Wetter || {};
     radarAttribution: 'Radar: <a href="https://www.rainviewer.com/api.html">RainViewer</a>',
     // Radar-Kacheln: Größe 256, Farbschema 2, geglättet (1), Schnee anzeigen (1)
     radarTileSuffix: "/256/{z}/{x}/{y}/2/1_1.png",
+    // Abdeckungskarte von RainViewer: SCHWARZ = hier gibt es kein Wetterradar.
+    // Wir legen sie leicht durchscheinend über die Karte, damit man weltweit
+    // sieht, ob „keine Farbe“ trocken bedeutet oder „kein Radar vorhanden“.
+    coveragePath: "/v2/coverage/0/256/{z}/{x}/{y}/0/0_0.png",
+    coverageOpacity: 0.3,
     radarOpacity: 0.75,
     // RainViewer liefert Radar nur bis Zoom 7 scharf. Darüber vergrößert
     // Leaflet die Zoom-7-Kacheln einfach (maxNativeZoom).
@@ -107,6 +112,8 @@ window.Wetter = window.Wetter || {};
     refreshTimer: null, // setInterval für das Neuladen der Frameliste
     lastFetchAt: 0, // Zeitpunkt (ms) des letzten ERFOLGREICHEN Abrufs der Frameliste
     fetching: false, // läuft gerade ein Abruf? (verhindert doppelte Abrufe)
+    coverageLayer: null, // Ebene „kein Radar hier“ (dunkel), siehe ensureCoverageLayer
+    coverageUrl: "", // Adresse dieser Ebene (um Server-Wechsel zu erkennen)
     retryTimer: null, // setTimeout für den nächsten Versuch nach einem Fehler
     retryCount: 0, // wie viele Fehlversuche in Folge
     resumeOnVisible: false, // nach dem Zurückkehren in den Tab weiterspielen?
@@ -405,6 +412,26 @@ window.Wetter = window.Wetter || {};
   }
 
   /**
+   * Abdeckungsebene („hier gibt es kein Radar“) einmalig auf die Karte legen.
+   * Sie hängt nur vom RainViewer-Server ab, nicht vom einzelnen Radarbild.
+   */
+  function ensureCoverageLayer() {
+    if (!state.map || !state.host) return;
+    const url = state.host + CONFIG.coveragePath;
+    // Schon vorhanden und vom selben Server? Dann nichts tun.
+    if (state.coverageLayer && state.coverageUrl === url) return;
+    if (state.coverageLayer) state.map.removeLayer(state.coverageLayer);
+    state.coverageUrl = url;
+    state.coverageLayer = L.tileLayer(url, {
+      opacity: CONFIG.coverageOpacity,
+      zIndex: 5, // über der Grundkarte, unter den Radarbildern (zIndex 10)
+      tileSize: 256,
+      maxNativeZoom: CONFIG.radarMaxNativeZoom,
+      maxZoom: CONFIG.maxZoom,
+    }).addTo(state.map);
+  }
+
+  /**
    * Kachel-Ebene für ein Frame anlegen – nur das Objekt, noch NICHT auf der
    * Karte (dann lädt es auch nichts). Auf die Karte kommt es erst über
    * syncLayers, wenn es angezeigt oder vorgeladen werden soll.
@@ -477,6 +504,7 @@ window.Wetter = window.Wetter || {};
       state.layers.clear();
     }
     state.host = parsed.host;
+    ensureCoverageLayer();
 
     // Nicht mehr benötigte Ebenen entfernen, neue anlegen (noch nicht auf die
     // Karte – das erledigt showFrame unten über syncLayers).
@@ -598,7 +626,16 @@ window.Wetter = window.Wetter || {};
     high.className = "radar-legend-label";
     high.textContent = "stark";
 
-    legend.append(low, bar, high);
+    // Zusätzlich: Kästchen „dunkel = kein Radar“ (passt zur Abdeckungsebene)
+    const noRadar = document.createElement("span");
+    noRadar.className = "radar-legend-label";
+    noRadar.style.cssText = "display:inline-flex;align-items:center;gap:4px;margin-left:6px;";
+    const swatch = document.createElement("span");
+    swatch.style.cssText =
+      "width:12px;height:12px;border-radius:3px;background:rgba(0,0,0,0.45);border:1px solid rgba(255,255,255,0.4);";
+    noRadar.append(swatch, document.createTextNode("kein Radar"));
+
+    legend.append(low, bar, high, noRadar);
     parent.insertBefore(legend, mapEl.nextSibling); // direkt unter die Karte
   }
 

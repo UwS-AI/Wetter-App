@@ -1,4 +1,8 @@
-# Wetter-App (Übungsprojekt)
+# UwS Wetter (Übungsprojekt)
+
+<img src="img/logo.svg" alt="UwS Wetter Logo" width="96">
+
+Live: https://uws-ai.github.io/Wetter-App/
 
 Persönliches Lernprojekt zum Herantasten an Code: eine kleine Wetter-Web-App
 mit HTML, CSS und JavaScript. Datenquelle: [Open-Meteo](https://open-meteo.com/) (kostenlos, kein API-Key).
@@ -20,6 +24,8 @@ mit HTML, CSS und JavaScript. Datenquelle: [Open-Meteo](https://open-meteo.com/)
 
 ```
 index.html         Seitenstruktur
+manifest.webmanifest  Name und Symbole für „Zum Home-Bildschirm“
+img/               Logo (logo.svg) und App-Symbole (PNG)
 css/style.css      Aussehen (iPad quer, iPad hoch, iPhone hoch)
 js/codes.js        Wettercodes → Text und Symbol
 js/api.js          Daten von Open-Meteo holen und aufbereiten

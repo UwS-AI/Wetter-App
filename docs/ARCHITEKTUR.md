@@ -29,6 +29,9 @@ an die hier beschriebenen Namen, damit die Teile zusammenpassen.
 
 ```
 index.html        Seitenstruktur (alle IDs siehe unten)
+manifest.webmanifest  App-Name „UwS Wetter“, Farben, Symbole (Home-Bildschirm)
+img/              logo.svg (Monogramm UwS in Wolke), apple-touch-icon.png (180, ohne
+                  runde Ecken), icon-192/512.png, icon-maskable-512.png, favicon-32.png
 css/style.css     Aussehen, Layout iPad quer + iPhone hoch
 js/codes.js       Wettercodes (WMO) -> Text, Emoji, Gruppe
 js/api.js         Abruf Open-Meteo (Vorhersage + Ortssuche) + Reverse-Geocoding
@@ -139,6 +142,14 @@ Für die **Anzeige** zählt die Ortszeit des Wetterorts, nicht die des Geräts:
 - `intensityLabel(mmPer15)` → „leicht“ | „mäßig“ | „stark“
 
 ### `Wetter.radar`
+- **Weltweit:** Grundkarte (OpenStreetMap) und Radar (RainViewer) gelten weltweit.
+  Wo es kein Wetterradar gibt, legt `radar.js` die RainViewer-Abdeckungsebene
+  (`{host}/v2/coverage/0/256/{z}/{x}/{y}/0/0_0.png`, schwarz = kein Radar) mit
+  Deckkraft 0,3 und `zIndex` 5 unter die Radarbilder (`zIndex` 10). Die Legende
+  zeigt dazu „kein Radar“. Seit 01.01.2026 liefert RainViewer frei nur noch
+  gemessene Bilder der letzten 2 Std. (keine Radar-Prognose, max. Zoom 7).
+- Fehlgeschlagener Abruf der Bilderliste → neuer Versuch nach 30 s, 1, 2, 5 Min.;
+  Ereignis `online` → sofort neu laden; neuestes Bild älter als 30 Min. → Hinweis.
 - `init(containerId)` – baut Karte in `#radar-map` und verdrahtet die
   Bedienelemente `#radar-play`, `#radar-slider`, `#radar-time`, `#radar-status`.
 - `setLocation(lat, lon, name, timeZone, utcOffsetSeconds)` – zentriert Karte
